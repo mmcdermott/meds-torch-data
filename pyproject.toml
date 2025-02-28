@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=61.0", "setuptools-scm>=8.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meds_torchdata"
+dynamic = ["version"]
+authors = [
+  {name="Matthew McDermott", email="mattmcdermott8@gmail.com"},
+  {name="Nassim Oufattole", email="noufattole@gmail.com"},
+  {name="Teya Bergamaschi", email="teyabergamaschi@gmail.com"},
+  {name="Aleksia Kolo", email="aleksiakolo@gmail.com"},
+]
+description = "An efficient, flexible PyTorch dataset class for MEDS data."
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "polars", "nested_ragged_tensors>=0.1.0", "numpy", "ml-mixins", "torch", "MEDS_transforms>=0.1.0",
+    "hydra-core", "omegaconf"
+]
+
+[tool.setuptools_scm]
+
+[project.optional-dependencies]
+dev = ["pre-commit<4"]
+tests = ["pytest", "pytest-cov[toml]", "meds_testing_helpers>=0.2"]
+benchmarks = ["ml-mixins[memtrackable]>=0.2", "rootutils"]
+docs = [
+    "mkdocs==1.6.0",
+    "mkdocs-gen-files==0.5.0",
+    "mkdocs-get-deps==0.2.0",
+    "mkdocs-git-authors-plugin==0.9.0",
+    "mkdocs-git-revision-date-localized-plugin==1.2.7",
+    "mkdocs-literate-nav==0.6.1",
+    "mkdocs-material==9.5.33",
+    "mkdocs-material-extensions==1.3.1",
+    "mkdocs-section-index==0.3.9",
+    "mkdocs-snippets==1.3.0",
+    "mkdocstrings==0.25.2",
+    "mkdocstrings-python==1.10.8"
+]
+
+[project.scripts]
+MTD_tokenize = "meds_torchdata.preprocessing.tokenization:main"
+MTD_tensorize = "meds_torchdata.preprocessing.tensorization:main"
+MTD_preprocess = "meds_torchdata.preprocessing.__main__:main"
+
+[tool.pytest.ini_options]
+addopts = [
+  "--color=yes",
+  "--doctest-modules",
+  "--ignore=docs",
+]
+
+[project.urls]
+Homepage = "https://github.com/mmcdermott/meds-torch-data"
+Issues = "https://github.com/mmcdermott/meds-torch-data/issues"

@@ -1,0 +1,30 @@
+defaults:
+  - _pipeline
+  - stage_configs:
+      - fit_normalization
+      - fit_vocabulary_indices
+  - _self_
+
+input_dir: ${oc.env:INPUT_DIR}
+cohort_dir: ${oc.env:OUTPUT_DIR}
+
+etl_metadata.pipeline_name: "tensorization"
+
+stage_configs:
+  reshard_to_split:
+    _script: "MEDS_transform-reshard_to_split"
+    n_subjects_per_shard: 10000
+  fit_normalization:
+    _script: "MEDS_transform-aggregate_code_metadata"
+  tokenization:
+    _script: "MTD_tokenize"
+  tensorization:
+    _script: "MTD_tensorize"
+
+stages:
+  - reshard_to_split
+  - fit_normalization
+  - fit_vocabulary_indices
+  - normalization
+  - tokenization
+  - tensorization

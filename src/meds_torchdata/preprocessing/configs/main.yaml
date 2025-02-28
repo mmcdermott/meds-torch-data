@@ -1,0 +1,21 @@
+defaults:
+  - _self_
+
+MEDS_dataset_dir: ???
+output_dir: ???
+
+stage_runner_fp: null
+
+do_overwrite: False
+do_reshard: False
+
+log_dir: ${output_dir}/.logs
+
+# Hydra
+hydra:
+  job:
+    name: MEDS_torchdata_preprocessing_${now:%Y-%m-%d_%H-%M-%S}
+  run:
+    dir: ${log_dir}
+  sweep:
+    dir: ${log_dir}
