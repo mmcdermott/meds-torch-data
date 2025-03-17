@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1742169175823,
+  "lastUpdate": 1742219607727,
   "repoUrl": "https://github.com/mmcdermott/meds-torch-data",
   "entries": {
     "Benchmark": [
@@ -1753,6 +1753,107 @@ window.BENCHMARK_DATA = {
             "value": 14110.4,
             "unit": "bytes",
             "range": 4238.13929821934,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/code",
+            "value": 28132.8,
+            "unit": "bytes",
+            "range": 8476.27859643868,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/time_delta_days",
+            "value": 14110.4,
+            "unit": "bytes",
+            "range": 4238.13929821934,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/mask",
+            "value": 3593.6,
+            "unit": "bytes",
+            "range": 1059.534824554835,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/numeric_value_mask",
+            "value": 3593.6,
+            "unit": "bytes",
+            "range": 1059.534824554835,
+            "extra": "Count: 10"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mattmcdermott8@gmail.com",
+            "name": "Matthew McDermott",
+            "username": "mmcdermott"
+          },
+          "committer": {
+            "email": "mattmcdermott8@gmail.com",
+            "name": "Matthew McDermott",
+            "username": "mmcdermott"
+          },
+          "distinct": true,
+          "id": "ca82b2bf52eeceb8f4966abe7ad5a1d7c56dbd7c",
+          "message": "Moved conftest to root so it can be used for fixtures in doctests as well.",
+          "timestamp": "2025-03-17T09:51:38-04:00",
+          "tree_id": "44ce5f2cc2ef71aab3fcffce7f820ca0e9a5749c",
+          "url": "https://github.com/mmcdermott/meds-torch-data/commit/ca82b2bf52eeceb8f4966abe7ad5a1d7c56dbd7c"
+        },
+        "date": 1742219607379,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Usage/Duration/Epoch",
+            "value": 0.47983180000000003,
+            "unit": "seconds",
+            "range": 0.004962460649720502,
+            "extra": "Count: 5"
+          },
+          {
+            "name": "Usage/Memory/benchmark",
+            "value": 2097072,
+            "unit": "bytes",
+            "range": null,
+            "extra": "Count: 1"
+          },
+          {
+            "name": "Usage/Duration/read_subject_descriptors",
+            "value": 0.00269317626953125,
+            "unit": "seconds",
+            "range": null,
+            "extra": "Count: 1"
+          },
+          {
+            "name": "Usage/Duration/__getitem__",
+            "value": 0.0010756423473358154,
+            "unit": "seconds",
+            "range": 0.00029509124553532795,
+            "extra": "Count: 2000"
+          },
+          {
+            "name": "Usage/Duration/collate",
+            "value": 0.023700404167175292,
+            "unit": "seconds",
+            "range": 0.006730718228185217,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/numeric_value",
+            "value": 14110.4,
+            "unit": "bytes",
+            "range": 4238.13929821934,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/static_mask",
+            "value": 3593.6,
+            "unit": "bytes",
+            "range": 1059.534824554835,
             "extra": "Count: 10"
           },
           {
