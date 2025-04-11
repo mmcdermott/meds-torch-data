@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1742922997687,
+  "lastUpdate": 1744335568819,
   "repoUrl": "https://github.com/mmcdermott/meds-torch-data",
   "entries": {
     "Benchmark": [
@@ -5939,6 +5939,103 @@ window.BENCHMARK_DATA = {
             "value": 0.019006013870239258,
             "unit": "seconds",
             "range": 0.005258263455960375,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/code",
+            "value": 28132.8,
+            "unit": "bytes",
+            "range": 8476.27859643868,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/numeric_value",
+            "value": 14110.4,
+            "unit": "bytes",
+            "range": 4238.13929821934,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/numeric_value_mask",
+            "value": 3593.6,
+            "unit": "bytes",
+            "range": 1059.534824554835,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/time_delta_days",
+            "value": 14110.4,
+            "unit": "bytes",
+            "range": 4238.13929821934,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/static_code",
+            "value": 3288,
+            "unit": "bytes",
+            "range": 944.466927836956,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/static_numeric_value",
+            "value": 1688,
+            "unit": "bytes",
+            "range": 472.233463918478,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/static_numeric_value_mask",
+            "value": 488,
+            "unit": "bytes",
+            "range": 118.0583659796195,
+            "extra": "Count: 10"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "mmcdermott",
+            "username": "mmcdermott"
+          },
+          "committer": {
+            "name": "mmcdermott",
+            "username": "mmcdermott"
+          },
+          "id": "580a7fc831644aa70113909f06977b7dfcc72098",
+          "message": "Re-formatted to use ruff and updated pre-commit versions.",
+          "timestamp": "2025-03-25T17:14:34Z",
+          "url": "https://github.com/mmcdermott/meds-torch-data/pull/19/commits/580a7fc831644aa70113909f06977b7dfcc72098"
+        },
+        "date": 1744335568490,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Usage/Duration/Epoch",
+            "value": 0.46410359999999995,
+            "unit": "seconds",
+            "range": 0.003959219026526491,
+            "extra": "Count: 5"
+          },
+          {
+            "name": "Usage/Memory/benchmark",
+            "value": 1819621,
+            "unit": "bytes",
+            "range": null,
+            "extra": "Count: 1"
+          },
+          {
+            "name": "Usage/Duration/__getitem__",
+            "value": 0.0010567417144775391,
+            "unit": "seconds",
+            "range": 0.00004279920597799257,
+            "extra": "Count: 2000"
+          },
+          {
+            "name": "Usage/Duration/collate",
+            "value": 0.019422459602355956,
+            "unit": "seconds",
+            "range": 0.0054260903630806686,
             "extra": "Count: 10"
           },
           {
