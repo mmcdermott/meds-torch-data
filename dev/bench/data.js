@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1744927509404,
+  "lastUpdate": 1744986388990,
   "repoUrl": "https://github.com/mmcdermott/meds-torch-data",
   "entries": {
     "Benchmark": [
@@ -7628,6 +7628,103 @@ window.BENCHMARK_DATA = {
             "value": 0.01920449733734131,
             "unit": "seconds",
             "range": 0.005348988686522785,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/code",
+            "value": 28132.8,
+            "unit": "bytes",
+            "range": 8476.27859643868,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/numeric_value",
+            "value": 14110.4,
+            "unit": "bytes",
+            "range": 4238.13929821934,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/numeric_value_mask",
+            "value": 3593.6,
+            "unit": "bytes",
+            "range": 1059.534824554835,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/time_delta_days",
+            "value": 14110.4,
+            "unit": "bytes",
+            "range": 4238.13929821934,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/static_code",
+            "value": 3288,
+            "unit": "bytes",
+            "range": 944.466927836956,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/static_numeric_value",
+            "value": 1688,
+            "unit": "bytes",
+            "range": 472.233463918478,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/static_numeric_value_mask",
+            "value": 488,
+            "unit": "bytes",
+            "range": 118.0583659796195,
+            "extra": "Count: 10"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "mmcdermott",
+            "username": "mmcdermott"
+          },
+          "committer": {
+            "name": "mmcdermott",
+            "username": "mmcdermott"
+          },
+          "id": "8fd122558aa4764e74e6c6b880e6974b656e0539",
+          "message": "Added an optional lightning datamodule extension.",
+          "timestamp": "2025-04-15T20:31:05Z",
+          "url": "https://github.com/mmcdermott/meds-torch-data/pull/30/commits/8fd122558aa4764e74e6c6b880e6974b656e0539"
+        },
+        "date": 1744986388038,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Usage/Duration/Epoch",
+            "value": 0.4637374,
+            "unit": "seconds",
+            "range": 0.006283892129879083,
+            "extra": "Count: 5"
+          },
+          {
+            "name": "Usage/Memory/benchmark",
+            "value": 1819677,
+            "unit": "bytes",
+            "range": null,
+            "extra": "Count: 1"
+          },
+          {
+            "name": "Usage/Duration/__getitem__",
+            "value": 0.0010600870847702027,
+            "unit": "seconds",
+            "range": 0.0003339328478009772,
+            "extra": "Count: 2000"
+          },
+          {
+            "name": "Usage/Duration/collate",
+            "value": 0.018639516830444337,
+            "unit": "seconds",
+            "range": 0.005205778555949431,
             "extra": "Count: 10"
           },
           {
