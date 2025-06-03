@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1748983806423,
+  "lastUpdate": 1748984297832,
   "repoUrl": "https://github.com/mmcdermott/meds-torch-data",
   "entries": {
     "Benchmark": [
@@ -10566,6 +10566,107 @@ window.BENCHMARK_DATA = {
             "value": 0.019477248191833496,
             "unit": "seconds",
             "range": 0.005371868065888249,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/code",
+            "value": 28132.8,
+            "unit": "bytes",
+            "range": 8476.27859643868,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/numeric_value",
+            "value": 14110.4,
+            "unit": "bytes",
+            "range": 4238.13929821934,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/numeric_value_mask",
+            "value": 3593.6,
+            "unit": "bytes",
+            "range": 1059.534824554835,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/time_delta_days",
+            "value": 14110.4,
+            "unit": "bytes",
+            "range": 4238.13929821934,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/static_code",
+            "value": 3288,
+            "unit": "bytes",
+            "range": 944.466927836956,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/static_numeric_value",
+            "value": 1688,
+            "unit": "bytes",
+            "range": 472.233463918478,
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/static_numeric_value_mask",
+            "value": 488,
+            "unit": "bytes",
+            "range": 118.0583659796195,
+            "extra": "Count: 10"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mattmcdermott8@gmail.com",
+            "name": "Matthew McDermott",
+            "username": "mmcdermott"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4e0ddf820119dab674dd6e78b1e241ed0bf485f6",
+          "message": "Merge pull request #51 from mmcdermott/50_lightning_hparams\n\nAdded saving of hyperparameters to lightning datamodule.",
+          "timestamp": "2025-06-04T04:56:06+08:00",
+          "tree_id": "c327e07eac101dd43962e140ef37f03843ac4826",
+          "url": "https://github.com/mmcdermott/meds-torch-data/commit/4e0ddf820119dab674dd6e78b1e241ed0bf485f6"
+        },
+        "date": 1748984297434,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Usage/Duration/Epoch",
+            "value": 0.46371799999999996,
+            "unit": "seconds",
+            "range": 0.004699977287176946,
+            "extra": "Count: 5"
+          },
+          {
+            "name": "Usage/Memory/benchmark",
+            "value": 2871124,
+            "unit": "bytes",
+            "range": null,
+            "extra": "Count: 1"
+          },
+          {
+            "name": "Usage/Duration/__getitem__",
+            "value": 0.0010565659999847413,
+            "unit": "seconds",
+            "range": 0.00025986355955286616,
+            "extra": "Count: 2000"
+          },
+          {
+            "name": "Usage/Duration/collate",
+            "value": 0.019156479835510255,
+            "unit": "seconds",
+            "range": 0.005386667154859545,
             "extra": "Count: 10"
           },
           {
