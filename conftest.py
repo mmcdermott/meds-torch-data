@@ -15,6 +15,7 @@ from meds_torchdata import MEDSPytorchDataset, MEDSTorchDataConfig
 importlib.reload(meds_torchdata.extensions)
 importlib.reload(meds_torchdata.pytest_plugin)
 
+
 if meds_torchdata.extensions._HAS_LIGHTNING:
     import meds_torchdata.extensions.lightning_datamodule
 
