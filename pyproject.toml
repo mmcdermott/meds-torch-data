@@ -33,7 +33,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pre-commit<4", "ruff", "pytest-cov", "hypothesis"]
+dev = ["pre-commit", "ruff", "pytest-cov", "hypothesis"]
 benchmarks = ["ml-mixins[memtrackable]>=0.2", "rootutils"]
 docs = [
   "mkdocs==1.6.1", "mkdocs-material==9.6.7", "mkdocstrings[python]==0.28.2", "mkdocstrings-shell~=1.0",
