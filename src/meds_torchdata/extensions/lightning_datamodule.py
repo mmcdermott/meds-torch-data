@@ -1,15 +1,19 @@
 import dataclasses
 from functools import cached_property
+from typing import Generic, TypeVar, cast
 
 import lightning as L
+from hydra.utils import get_class
 from meds import held_out_split, train_split, tuning_split
 from torch.utils.data import DataLoader
 
 from ..config import MEDSTorchDataConfig
 from ..pytorch_dataset import MEDSPytorchDataset
 
+DatasetT = TypeVar("DatasetT", bound=MEDSPytorchDataset)
 
-class Datamodule(L.LightningDataModule):
+
+class Datamodule(L.LightningDataModule, Generic[DatasetT]):
     """A lightning datamodule for a MEDSPytorchDataset.
 
     > [!NOTE]
@@ -74,6 +78,7 @@ class Datamodule(L.LightningDataModule):
     """
 
     config: MEDSTorchDataConfig
+    data_class = MEDSPytorchDataset
     batch_size: int
     num_workers: int | None
     pin_memory: bool | None = None
@@ -81,12 +86,16 @@ class Datamodule(L.LightningDataModule):
     def __init__(
         self,
         config: MEDSTorchDataConfig,
+        data_class: type[DatasetT] | str = MEDSPytorchDataset,
         batch_size: int = 32,
         num_workers: int | None = None,
         pin_memory: bool | None = None,
     ):
         super().__init__()
         self.config = config
+        if isinstance(data_class, str):
+            data_class = cast("type[DatasetT]", get_class(data_class))
+        self.data_class: type[DatasetT] = cast("type[DatasetT]", data_class)
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.pin_memory = pin_memory
@@ -109,18 +118,18 @@ class Datamodule(L.LightningDataModule):
         return out
 
     @cached_property
-    def train_dataset(self) -> MEDSPytorchDataset:
-        return MEDSPytorchDataset(self.config, split=train_split)
+    def train_dataset(self) -> DatasetT:
+        return self.data_class(self.config, split=train_split)
 
     @cached_property
-    def val_dataset(self) -> MEDSPytorchDataset:
-        return MEDSPytorchDataset(self.config, split=tuning_split)
+    def val_dataset(self) -> DatasetT:
+        return self.data_class(self.config, split=tuning_split)
 
     @cached_property
-    def test_dataset(self) -> MEDSPytorchDataset:
-        return MEDSPytorchDataset(self.config, split=held_out_split)
+    def test_dataset(self) -> DatasetT:
+        return self.data_class(self.config, split=held_out_split)
 
-    def __dataloader(self, dataset: MEDSPytorchDataset, **kwargs) -> DataLoader:
+    def __dataloader(self, dataset, **kwargs) -> DataLoader:
         return DataLoader(dataset, collate_fn=dataset.collate, **self.shared_dataloader_kwargs, **kwargs)
 
     def train_dataloader(self):
