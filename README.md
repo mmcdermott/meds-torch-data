@@ -1177,9 +1177,9 @@ The `MTD_preprocess` command runs the following pre-processing stages:
 > - Drop subjects with infrequent values
 > - Occlude outlier numeric values
 > - etc.
->   You should perform these steps on the raw MEDS data _prior to running the tensorization command_. This
->   ensures that the data is modified as you desire in an efficient, transparent way and that the tensorization
->   step works with data in its final format to avoid any issues with discrepancies in code vocabulary, etc.
+>     You should perform these steps on the raw MEDS data _prior to running the tensorization command_. This
+>     ensures that the data is modified as you desire in an efficient, transparent way and that the tensorization
+>     step works with data in its final format to avoid any issues with discrepancies in code vocabulary, etc.
 
 ### Advanced features
 
