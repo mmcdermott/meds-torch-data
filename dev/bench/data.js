@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1757717599949,
+  "lastUpdate": 1757717884524,
   "repoUrl": "https://github.com/mmcdermott/meds-torch-data",
   "entries": {
     "Benchmark": [
@@ -13022,6 +13022,107 @@ window.BENCHMARK_DATA = {
             "name": "Usage/Duration/collate",
             "value": 0.029920291900634766,
             "range": "0.024074285241740365",
+            "unit": "seconds",
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/code",
+            "value": 28124.8,
+            "range": "8476.27859643868",
+            "unit": "bytes",
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/numeric_value",
+            "value": 14102.4,
+            "range": "4238.13929821934",
+            "unit": "bytes",
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/numeric_value_mask",
+            "value": 3585.6,
+            "range": "1059.534824554835",
+            "unit": "bytes",
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/time_delta_days",
+            "value": 14102.4,
+            "range": "4238.13929821934",
+            "unit": "bytes",
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/static_code",
+            "value": 3280,
+            "range": "944.466927836956",
+            "unit": "bytes",
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/static_numeric_value",
+            "value": 1680,
+            "range": "472.233463918478",
+            "unit": "bytes",
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/static_numeric_value_mask",
+            "value": 480,
+            "range": "118.0583659796195",
+            "unit": "bytes",
+            "extra": "Count: 10"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "payal.chandak@gmail.com",
+            "name": "Payal Chandak",
+            "username": "payalchandak"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6007cd8d57d528c3e8d48e6993e17bd324557835",
+          "message": "Merge pull request #62 from mmcdermott/datamodule\n\nMake datamodule agnostic to pytorch class name",
+          "timestamp": "2025-09-12T18:56:36-04:00",
+          "tree_id": "1a6cbad8d0e665d9ce0240441d485b45f31ff3cc",
+          "url": "https://github.com/mmcdermott/meds-torch-data/commit/6007cd8d57d528c3e8d48e6993e17bd324557835"
+        },
+        "date": 1757717883911,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Usage/Duration/Epoch",
+            "value": 0.5606278,
+            "range": "0.03450670001173776",
+            "unit": "seconds",
+            "extra": "Count: 5"
+          },
+          {
+            "name": "Usage/Memory/benchmark",
+            "value": 1792738,
+            "range": "null",
+            "unit": "bytes",
+            "extra": "Count: 1"
+          },
+          {
+            "name": "Usage/Duration/__getitem__",
+            "value": 0.0012450226545333862,
+            "range": "0.0000558540836986108",
+            "unit": "seconds",
+            "extra": "Count: 2000"
+          },
+          {
+            "name": "Usage/Duration/collate",
+            "value": 0.029866552352905272,
+            "range": "0.0240336053014325",
             "unit": "seconds",
             "extra": "Count: 10"
           },
