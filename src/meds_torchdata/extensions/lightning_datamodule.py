@@ -75,6 +75,25 @@ class Datamodule(L.LightningDataModule, Generic[DatasetT]):
         >>> test_dataloader = D.test_dataloader()
         >>> next(iter(test_dataloader))
         MEDSTorchBatch(code=tensor([[ 5,  2, 10, 11, 10, 11, 10, 11,  4]]), ..., boolean_value=None)
+
+    You can also override the dataset class used by the datamodule via the `data_class` argument. This is
+    useful for injecting convenience helpers or light instrumentation while retaining the core
+    `MEDSPytorchDataset` functionality.
+
+        >>> class MyDataset(MEDSPytorchDataset):
+        ...     def who_am_i(self):
+        ...         return "custom"
+        >>> D = Datamodule(config=sample_dataset_config, data_class=MyDataset, batch_size=1)
+        >>> isinstance(D.train_dataset, MyDataset)
+        True
+        >>> isinstance(D.val_dataset, MyDataset)
+        True
+        >>> isinstance(D.test_dataset, MyDataset)
+        True
+        >>> D.train_dataset.who_am_i()
+        'custom'
+        >>> D.train_dataset is D.val_dataset
+        False
     """
 
     config: MEDSTorchDataConfig
