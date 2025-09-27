@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="static/logo_dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="static/logo_light.svg">
+    <img width="520" height="200" alt="MEDS Logot" src="static/logo_light.svg">
+  </picture>
+</p>
+
 # MEDS TorchData: A PyTorch Dataset Class for MEDS Datasets
 
 [![PyTorch](https://img.shields.io/badge/PyTorch-ee4c2c?logo=pytorch&logoColor=white)](https://pytorch.org/get-started/locally/)
