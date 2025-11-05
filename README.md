@@ -20,6 +20,7 @@
 [![Contributors](https://img.shields.io/github/contributors/oufattole/meds-torch.svg)](https://github.com/mmcdermott/meds-torch-data/graphs/contributors)
 [![Pull Requests](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/mmcdermott/meds-torch-data/pulls)
 [![License](https://img.shields.io/badge/License-MIT-green.svg?labelColor=gray)](https://github.com/mmcdermott/meds-torch-data#license)
+[![DOI](https://zenodo.org/badge/936784185.svg)](https://doi.org/10.5281/zenodo.17535772)
 
 ## 🚀 Quick Start
 

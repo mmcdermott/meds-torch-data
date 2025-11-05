@@ -1,0 +1,33 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: MEDS TorchData
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - family-names: McDermott
+    given-names: Matthew
+    email: mattmcdermott8@gmail.com
+    orcid: 'https://orcid.org/0000-0001-6048-9707'
+  - given-names: Nassim
+    family-names: Oufattole
+    orcid: 'https://orcid.org/0009-0002-9559-6216'
+  - family-names: Bergamaschi
+    given-names: Teya
+    orcid: 'https://orcid.org/0000-0002-1988-3478'
+  - given-names: Payal
+    family-names: Chandak
+    orcid: 'https://orcid.org/0000-0003-1097-803X'
+  - given-names: Ryan
+    family-names: King
+  - given-names: Aleksia
+    family-names: Kolo
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.17535772
+repository-code: 'https://github.com/mmcdermott/meds-torch-data'
+abstract: 'MEDS TorchData: A PyTorch Dataset Class for MEDS Datasets'
+license: MIT
