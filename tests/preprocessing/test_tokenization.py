@@ -109,7 +109,27 @@ NORMALIZED_SHARDS = parse_meds_csvs(
 
 
 def ts_to_time_delta_days(ts: list[list[datetime]]) -> list[list[float]]:
-    """TODO: Doctests"""
+    """Convert per-subject timestamps to day offsets.
+
+    The first element for each subject is always ``nan`` because there is no
+    preceding event to compare against. Subsequent elements express the elapsed
+    time in days between consecutive timestamps.
+
+    Examples:
+
+        >>> ts_to_time_delta_days([[datetime(2020, 1, 1), datetime(2020, 1, 2)]])
+        [[nan, 1.0]]
+
+        >>> ts_to_time_delta_days([
+        ...     [
+        ...         datetime(2020, 1, 1, 0, 0),
+        ...         datetime(2020, 1, 1, 12, 0),
+        ...         datetime(2020, 1, 2, 0, 0),
+        ...     ],
+        ...     [datetime(2020, 6, 1), datetime(2020, 6, 3)],
+        ... ])
+        [[nan, 0.5, 0.5], [nan, 2.0]]
+    """
     out = []
     for subject_ts in ts:
         out.append([float("nan")])
