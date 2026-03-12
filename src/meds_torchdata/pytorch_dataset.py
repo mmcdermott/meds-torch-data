@@ -203,7 +203,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             )
 
         self.index = list(
-            zip(self.schema_df[DataSchema.subject_id_name], self.schema_df[self.END_IDX], strict=False)
+            zip(self.schema_df[DataSchema.subject_id_name], self.schema_df[self.END_IDX], strict=True)
         )
         self.labels = self.schema_df[self.LABEL_COL] if self.has_task_labels else None
 
@@ -424,8 +424,8 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
     def _seeded_getitem(self, idx: int, seed: int | None = None) -> dict[str, torch.Tensor]:
         """Retrieve a single data point from the dataset with a specified random seed.
 
-        This is merely a deterministic wrapper around the `_getitem` method that allows for deterministic
-        subsequence sampling.
+        This is a wrapper around the core item-retrieval logic that allows for deterministic subsequence
+        sampling via an optional random seed.
         """
 
         subject_id, end_idx = self.index[idx]
@@ -1045,8 +1045,8 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         out["code"] = tensorized.pop("code").long()
         if self.config.batch_mode == BatchMode.SEM:
             out["event_mask"] = tensorized.pop("dim1/mask")
-        out["numeric_value"] = torch.nan_to_num(tensorized["numeric_value"], nan=0).float()
-        out["numeric_value_mask"] = ~torch.isnan(tensorized.pop("numeric_value"))
+        out["numeric_value_mask"] = ~torch.isnan(tensorized["numeric_value"])
+        out["numeric_value"] = torch.nan_to_num(tensorized.pop("numeric_value"), nan=0).float()
 
         match self.config.static_inclusion_mode:
             case StaticInclusionMode.OMIT:
