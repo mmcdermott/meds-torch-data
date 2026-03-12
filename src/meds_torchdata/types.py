@@ -1339,7 +1339,7 @@ class MEDSTorchBatch:
 
     def items(self) -> Generator[tuple[str, torch.Tensor], None, None]:
         """Get the items of the batch."""
-        yield from zip(self.keys(), self.values(), strict=False)
+        yield from zip(self.keys(), self.values(), strict=True)
 
     @property
     def mode(self) -> BatchMode:
@@ -1580,11 +1580,11 @@ class MEDSTorchBatch:
         return self.__str_tensor_list(n, self.SM_TENSOR_NAMES)
 
     def __SE_str_lines(self) -> list[str]:
-        """Gets the lines in the string representation corresponding to the SM data tensors."""
+        """Gets the lines in the string representation corresponding to the SE (event-level) data tensors."""
         return self.__str_tensor_list("Event-level", self.SE_TENSOR_NAMES)
 
     def __SEM_str_lines(self) -> list[str]:
-        """Gets the lines in the string representation corresponding to the SM data tensors."""
+        """Gets the lines in the string representation for the SEM (measurement-level) tensors."""
         return self.__str_tensor_list("Measurement-level", self.SEM_TENSOR_NAMES)
 
     def __static_str_lines(self) -> list[str]:
