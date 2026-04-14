@@ -65,7 +65,7 @@ def test_get_task_seq_bounds_and_labels_property(data):
 
     # Drop labels for subjects not in schema_df
     label_subset = label_df.filter(
-        pl.col(DataSchema.subject_id_name).is_in(schema_df[DataSchema.subject_id_name])
+        pl.col(DataSchema.subject_id_name).is_in(schema_df[DataSchema.subject_id_name].implode())
     )
 
     expected_rows = []
