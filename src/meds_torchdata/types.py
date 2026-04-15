@@ -75,6 +75,19 @@ class SubsequenceSamplingStrategy(StrEnum):
             2
             >>> SubsequenceSamplingStrategy.RANDOM.subsample_st_offset(10, 10) is None
             True
+
+            The random sampler must be able to place the window flush against the end of the
+            sequence (i.e. sample `st = seq_len - max_seq_len`, so that the last event at index
+            `seq_len - 1` is included). Prior to the fix for issue #67 this was off-by-one and
+            the last event was never reachable:
+
+            >>> possible_st = {
+            ...     SubsequenceSamplingStrategy.subsample_st_offset("random", 10, 5, rng=s)
+            ...     for s in range(1000)
+            ... }
+            >>> sorted(possible_st)
+            [0, 1, 2, 3, 4, 5]
+
             >>> SubsequenceSamplingStrategy.subsample_st_offset("foo", 10, 5)
             Traceback (most recent call last):
                 ...
@@ -86,7 +99,10 @@ class SubsequenceSamplingStrategy(StrEnum):
 
         match self:
             case SubsequenceSamplingStrategy.RANDOM:
-                return resolve_rng(rng).choice(seq_len - max_seq_len)
+                # NOTE: `choice(n)` draws from `[0, n)`, so to let `st` reach `seq_len - max_seq_len`
+                # (and thus let `data[st:st + max_seq_len]` include the final event at index
+                # `seq_len - 1`) we must pass `seq_len - max_seq_len + 1`. See issue #67.
+                return resolve_rng(rng).choice(seq_len - max_seq_len + 1)
             case SubsequenceSamplingStrategy.TO_END:
                 return seq_len - max_seq_len
             case SubsequenceSamplingStrategy.FROM_START:

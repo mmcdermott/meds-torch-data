@@ -550,10 +550,10 @@ class MEDSTorchDataConfig:
             [4 5 0]
             >>> pprint_dense(cfg.process_dynamic_data(data, rng=3).to_dense())
             code
-            [52 60 70]
+            [60 70 71]
             .
             time_delta
-            [0 6 7]
+            [6 7 0]
 
         If we pass in an invalid number of static sequence elements to reserve, we get an error.
 

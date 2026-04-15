@@ -531,13 +531,13 @@ n_static_seq_els (int):
 2
 dynamic (JointNestedRaggedTensorDict):
 code
-[ 8  9  3 10 11]
+[ 8  9 10 11  4]
 .
 numeric_value
-[        nan -0.54382396         nan -1.4474752  -0.34049404]
+[        nan -0.54382396 -1.4474752  -0.34049404         nan]
 .
 time_delta_days
-[       nan        nan 11766.1045     0.         0.    ]
+[       nan        nan 0.         0.         0.09787037]
 >>> pyd.config.static_inclusion_mode = "include"
 
 ```
@@ -603,13 +603,13 @@ static_numeric_value (list):
 [nan, 0.06802856922149658]
 dynamic (JointNestedRaggedTensorDict):
 code
-[10 11 10 11 10]
+[11 10 11 10 11]
 .
 numeric_value
-[-0.04626633  0.69391906 -0.30007038  0.79735875 -0.31064537]
+[ 0.69391906 -0.30007038  0.79735875 -0.31064537  1.0042422 ]
 .
 time_delta_days
-[0.01888889 0.         0.0084838  0.         0.01167824]
+[0.         0.0084838  0.         0.01167824 0.        ]
 >>> print_element(pyd._seeded_getitem(1, seed=1))
 static_code (list):
 [6, 9]
@@ -617,13 +617,13 @@ static_numeric_value (list):
 [nan, 0.06802856922149658]
 dynamic (JointNestedRaggedTensorDict):
 code
-[10 11 10 11 10]
+[11 10 11 10 11]
 .
 numeric_value
-[ 0.03833488  0.79735875  0.33972722  0.7456389  -0.04626633]
+[ 0.79735875  0.33972722  0.7456389  -0.04626633  0.69391906]
 .
 time_delta_days
-[0.00115741 0.         0.01373843 0.         0.01888889]
+[0.         0.01373843 0.         0.01888889 0.        ]
 
 ```
 

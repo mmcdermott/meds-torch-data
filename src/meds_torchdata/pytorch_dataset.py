@@ -587,8 +587,15 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         subject_dynamic_data = JointNestedRaggedTensorDict(tensors_fp=dynamic_data_fp)[subject_idx, st:end]
 
         subj_schema = self.schema_dfs_by_shard[shard][subject_idx]
-        static_code = subj_schema["static_code"].item().to_list()
-        static_numeric_value = subj_schema["static_numeric_value"].item().to_list()
+        # `.item()` returns the polars list for a given row. When the dataset has no static
+        # data at all, the column may be null (not just an empty list), in which case `.item()`
+        # returns `None` and `.to_list()` would raise `AttributeError`. See issue #63.
+        static_code_list = subj_schema["static_code"].item()
+        static_numeric_value_list = subj_schema["static_numeric_value"].item()
+        static_code = static_code_list.to_list() if static_code_list is not None else []
+        static_numeric_value = (
+            static_numeric_value_list.to_list() if static_numeric_value_list is not None else []
+        )
 
         return subject_dynamic_data, StaticData(static_code, static_numeric_value)
 

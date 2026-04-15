@@ -841,18 +841,18 @@ docs = [
 
 [package.metadata]
 requires-dist = [
-    { name = "hydra-core" },
+    { name = "hydra-core", specifier = ">=1.3" },
     { name = "hydra-joblib-launcher", marker = "extra == 'parallelized'", specifier = "~=1.2.0" },
     { name = "lightning", marker = "extra == 'lightning'", specifier = "~=2.5.1" },
-    { name = "meds", specifier = "~=0.4.0" },
-    { name = "meds-testing-helpers", specifier = ">=0.3.0" },
-    { name = "meds-transforms", specifier = "~=0.5.2" },
-    { name = "nested-ragged-tensors", specifier = ">=0.1.0" },
-    { name = "numpy" },
-    { name = "omegaconf" },
-    { name = "polars", specifier = "~=1.30.0" },
+    { name = "meds", specifier = ">=0.4,<0.5" },
+    { name = "meds-testing-helpers", specifier = ">=0.3,<0.4" },
+    { name = "meds-transforms", specifier = ">=0.5.2,<0.6" },
+    { name = "nested-ragged-tensors", specifier = ">=0.1.0,<0.2" },
+    { name = "numpy", specifier = ">=1.26,<3" },
+    { name = "omegaconf", specifier = ">=2.3" },
+    { name = "polars", specifier = ">=1.30,<2" },
     { name = "pytest" },
-    { name = "torch" },
+    { name = "torch", specifier = ">=2.0" },
 ]
 provides-extras = ["parallelized", "lightning"]
 
@@ -863,7 +863,7 @@ benchmarks = [
 ]
 dev = [
     { name = "hypothesis" },
-    { name = "pre-commit", specifier = "<4" },
+    { name = "pre-commit" },
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
