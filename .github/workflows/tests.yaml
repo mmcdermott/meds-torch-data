@@ -26,13 +26,15 @@ jobs:
 
       - name: Run tests
         run: >
-          uv run pytest -v --cov=src -m "not parallelized and not lightning"
+          uv run pytest -v --cov=src --cov-report=xml
+          -m "not parallelized and not lightning"
           --ignore="benchmark" --ignore="src/meds_torchdata/extensions"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5.5.4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
 
       - name: Install lightning
         run: |
@@ -40,21 +42,23 @@ jobs:
 
       - name: Run doctests with lightning
         run: |
-          uv run pytest -v --cov=src src/meds_torchdata/extensions/lightning_datamodule.py
+          uv run pytest -v --cov=src --cov-report=xml src/meds_torchdata/extensions/lightning_datamodule.py
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5.5.4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
 
       - name: Run test/* tests with lightning
         run: |
-          uv run pytest -v --cov=src tests/ -m "lightning and not parallelized"
+          uv run pytest -v --cov=src --cov-report=xml tests/ -m "lightning and not parallelized"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5.5.4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
 
       - name: Install joblib
         run: |
@@ -62,9 +66,10 @@ jobs:
 
       - name: Run tests with joblib
         run: |
-          uv run pytest -v --cov=src tests/ -m "parallelized and not lightning"
+          uv run pytest -v --cov=src --cov-report=xml tests/ -m "parallelized and not lightning"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5.5.4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
