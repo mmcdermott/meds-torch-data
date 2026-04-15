@@ -45,6 +45,36 @@ class SubsequenceSamplingStrategy(StrEnum):
         TO_END: Sample a subsequence from the end of the full sequence.
             Note this starts at the last element and moves back.
         FROM_START: Sample a subsequence from the start of the full sequence.
+        STEP_THROUGH: Deterministically walk through every permitted subsequence of the full
+            sequence in order, stepping by `MEDSTorchDataConfig.step_through_stride` (or
+            equivalently `step_through_overlap`) elements. The stride / overlap is expressed
+            in the same unit as `max_seq_len` — **events** in `BatchMode.SEM` and
+            **measurements** in `BatchMode.SM` — so windows line up with what the user
+            specified regardless of mode. Unlike the other strategies, this expands one
+            subject into multiple dataset elements (one per window), so `len(dataset)` grows
+            for subjects with longer sequences. `MEDSPytorchDataset.__init__` writes the
+            per-window end-event into `self.index` directly, and in SM mode additionally
+            records the measurement-level window end in a parallel
+            `self.step_through_meas_ends` array. `subsample_st_offset` delegates to `TO_END`
+            (take the last `max_seq_len` elements of the loaded prefix), so step-through is
+            "modify the index, run `TO_END` per entry". In SM mode, the measurement-level end
+            is passed explicitly through `MEDSTorchDataConfig.process_dynamic_data` via its
+            `explicit_end` parameter, which lets the window terminate mid-event and preserves
+            the exact measurement-level coverage the user asked for. A warning with the
+            observed expansion stats is logged on startup; see
+            `MEDSTorchDataConfig.include_subject_window_counts_in_batch` for the
+            corresponding loss-reweighting escape hatch.
+
+            Performance note for SM mode: each per-window load reads events
+            `[0, enclosing_event_end)` from disk, where `enclosing_event_end` is the smallest
+            event index whose cumulative measurement count covers the target window's
+            measurement end. If the dataset has very fat events (many measurements per
+            timestamp) and `max_seq_len` is small relative to the per-event measurement
+            count, consecutive windows can share the same enclosing event and re-read the
+            same prefix — so SM-mode step-through I/O does **not** scale purely with
+            `max_seq_len` in that regime. For cohorts with thin events (≤ a few measurements
+            per timestamp) this is a non-issue. Switching to `BatchMode.SEM` avoids the
+            re-read entirely because the window is already event-aligned.
 
     Methods:
         subsample_st_offset: Subsample starting offset based on maximum sequence length and sampling strategy.
@@ -57,6 +87,7 @@ class SubsequenceSamplingStrategy(StrEnum):
     BALANCED_RANDOM = "balanced_random"
     TO_END = "to_end"
     FROM_START = "from_start"
+    STEP_THROUGH = "step_through"
 
     def subsample_st_offset(
         self,
@@ -85,6 +116,16 @@ class SubsequenceSamplingStrategy(StrEnum):
             >>> SubsequenceSamplingStrategy.subsample_st_offset("random", 10, 5, rng=1)
             2
             >>> SubsequenceSamplingStrategy.RANDOM.subsample_st_offset(10, 10) is None
+            True
+
+            `STEP_THROUGH` delegates to `TO_END`: each index entry already points at the
+            "load me up to this event" endpoint, so the sampler just takes the last
+            `max_seq_len` elements of the loaded prefix. `MEDSPytorchDataset.__init__`
+            inserts the extra per-window index entries before this method is ever called.
+
+            >>> SubsequenceSamplingStrategy.STEP_THROUGH.subsample_st_offset(10, 5)
+            5
+            >>> SubsequenceSamplingStrategy.STEP_THROUGH.subsample_st_offset(5, 10) is None
             True
 
             The random sampler must be able to place the window flush against the end of the
@@ -137,7 +178,11 @@ class SubsequenceSamplingStrategy(StrEnum):
                 # probability of `max_seq_len / (seq_len + max_seq_len - 1)`. Callers must handle
                 # the negative/overhanging offset by clipping the slice to `[0, seq_len)`.
                 return int(resolve_rng(rng).integers(-(max_seq_len - 1), seq_len))
-            case SubsequenceSamplingStrategy.TO_END:
+            case SubsequenceSamplingStrategy.TO_END | SubsequenceSamplingStrategy.STEP_THROUGH:
+                # STEP_THROUGH is just TO_END over a modified index: the dataset constructor
+                # has already inserted one `(subject_id, window_end_event)` entry per window,
+                # so by the time this runs the loaded prefix *is* the step-through window and
+                # TO_END takes its last `max_seq_len` elements.
                 return seq_len - max_seq_len
             case SubsequenceSamplingStrategy.FROM_START:
                 return 0
@@ -1277,6 +1322,11 @@ class MEDSTorchBatch:
     # Task label data elements (subject-level):
     boolean_value: torch.BoolTensor | None = None
 
+    # Optional oversampling weight for step-through sampling: for each sample, the number of
+    # dataset elements the originating subject expands into. Intended for per-sample loss
+    # reweighting (e.g. `loss_weight = 1 / n_subject_windows`). Shape: `[batch_size]`.
+    n_subject_windows: torch.LongTensor | None = None
+
     STATIC_TENSOR_NAMES: ClassVar[tuple[str]] = (
         "static_code",
         "static_numeric_value",
@@ -1363,6 +1413,9 @@ class MEDSTorchBatch:
 
         if self.has_labels:
             self.__check_shape("boolean_value", (self.batch_size,))
+
+        if self.n_subject_windows is not None:
+            self.__check_shape("n_subject_windows", (self.batch_size,))
 
     # Here we define some operators to make this behave like a dictionary:
     def __getitem__(self, key: str) -> torch.Tensor:
