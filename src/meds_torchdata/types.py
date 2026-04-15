@@ -31,7 +31,17 @@ class SubsequenceSamplingStrategy(StrEnum):
     """An enumeration of the possible subsequence sampling strategies for the dataset.
 
     Attributes:
-        RANDOM: Randomly sample a subsequence from the full sequence.
+        RANDOM: Randomly sample a subsequence from the full sequence. Start offsets are drawn
+            uniformly over `[0, seq_len - max_seq_len]`, which yields a trapezoidal per-event
+            inclusion distribution: events near the middle of the sequence appear in roughly
+            `max_seq_len` times as many windows as events at the boundaries. See issue #67.
+        BALANCED_RANDOM: Randomly sample a subsequence such that every event in the sequence has
+            equal probability of being included in the sampled window. This is done by drawing a
+            (possibly negative) start offset uniformly from `{-(max_seq_len - 1), ..., seq_len - 1}`
+            and clipping the resulting window to the sequence. Windows near the boundaries are
+            therefore shorter than `max_seq_len`; the collator handles padding downstream. The
+            per-event inclusion probability is exactly `max_seq_len / (seq_len + max_seq_len - 1)`
+            for every position, removing the structural boundary bias of `RANDOM`. See issue #67.
         TO_END: Sample a subsequence from the end of the full sequence.
             Note this starts at the last element and moves back.
         FROM_START: Sample a subsequence from the start of the full sequence.
@@ -51,6 +61,7 @@ class SubsequenceSamplingStrategy(StrEnum):
     """
 
     RANDOM = "random"
+    BALANCED_RANDOM = "balanced_random"
     TO_END = "to_end"
     FROM_START = "from_start"
     STEP_THROUGH = "step_through"
@@ -104,6 +115,22 @@ class SubsequenceSamplingStrategy(StrEnum):
             >>> sorted(possible_st)
             [0, 1, 2, 3, 4, 5]
 
+            `BALANCED_RANDOM` draws a signed start offset uniformly from
+            `{-(max_seq_len - 1), ..., seq_len - 1}`, which is how we get a flat per-event
+            inclusion distribution (see issue #67). The full support of `st` is reachable:
+
+            >>> possible_st = {
+            ...     SubsequenceSamplingStrategy.subsample_st_offset("balanced_random", 10, 5, rng=s)
+            ...     for s in range(5000)
+            ... }
+            >>> sorted(possible_st)
+            [-4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+            `BALANCED_RANDOM` returns `None` (no subsampling) when the sequence already fits:
+
+            >>> SubsequenceSamplingStrategy.BALANCED_RANDOM.subsample_st_offset(5, 10) is None
+            True
+
             >>> SubsequenceSamplingStrategy.subsample_st_offset("foo", 10, 5)
             Traceback (most recent call last):
                 ...
@@ -118,7 +145,14 @@ class SubsequenceSamplingStrategy(StrEnum):
                 # NOTE: `choice(n)` draws from `[0, n)`, so to let `st` reach `seq_len - max_seq_len`
                 # (and thus let `data[st:st + max_seq_len]` include the final event at index
                 # `seq_len - 1`) we must pass `seq_len - max_seq_len + 1`. See issue #67.
-                return resolve_rng(rng).choice(seq_len - max_seq_len + 1)
+                return int(resolve_rng(rng).choice(seq_len - max_seq_len + 1))
+            case SubsequenceSamplingStrategy.BALANCED_RANDOM:
+                # Draw `st` uniformly from `{-(max_seq_len - 1), ..., seq_len - 1}` so that every
+                # event at index `i` is contained in exactly `max_seq_len` of the `seq_len +
+                # max_seq_len - 1` equally-likely windows, giving a uniform per-event inclusion
+                # probability of `max_seq_len / (seq_len + max_seq_len - 1)`. Callers must handle
+                # the negative/overhanging offset by clipping the slice to `[0, seq_len)`.
+                return int(resolve_rng(rng).integers(-(max_seq_len - 1), seq_len))
             case SubsequenceSamplingStrategy.TO_END:
                 return seq_len - max_seq_len
             case SubsequenceSamplingStrategy.FROM_START:
