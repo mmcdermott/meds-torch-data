@@ -129,7 +129,7 @@ class SubsequenceSamplingStrategy(StrEnum):
                 # NOTE: `choice(n)` draws from `[0, n)`, so to let `st` reach `seq_len - max_seq_len`
                 # (and thus let `data[st:st + max_seq_len]` include the final event at index
                 # `seq_len - 1`) we must pass `seq_len - max_seq_len + 1`. See issue #67.
-                return resolve_rng(rng).choice(seq_len - max_seq_len + 1)
+                return int(resolve_rng(rng).choice(seq_len - max_seq_len + 1))
             case SubsequenceSamplingStrategy.BALANCED_RANDOM:
                 # Draw `st` uniformly from `{-(max_seq_len - 1), ..., seq_len - 1}` so that every
                 # event at index `i` is contained in exactly `max_seq_len` of the `seq_len +
