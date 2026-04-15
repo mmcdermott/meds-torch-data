@@ -127,6 +127,17 @@ class MEDSTorchDataConfig:
     # Extra output
     include_window_last_observed_in_schema: bool = False
 
+    # STEP_THROUGH sampling-specific options.
+    # - `step_through_stride`: stride (in sequence elements, matching the units of `max_seq_len`)
+    #   between consecutive windows. Must be a positive integer when `seq_sampling_strategy ==
+    #   STEP_THROUGH`. Must be `None` for all other strategies.
+    # - `include_subject_window_counts_in_batch`: when True, the collated `MEDSTorchBatch` will
+    #   populate its `n_subject_windows` tensor (shape `[batch_size]`) with the number of
+    #   dataset elements each sample's subject expands into, so downstream losses can reweight
+    #   by `1 / n_subject_windows` to undo step-through oversampling of long sequences.
+    step_through_stride: int | None = None
+    include_subject_window_counts_in_batch: bool = False
+
     @classmethod
     def add_to_config_store(cls, group: str | None = None):
         """Adds this class to the Hydra config store such that instantiation will create it natively.
@@ -147,6 +158,8 @@ class MEDSTorchDataConfig:
                              'task_labels_dir': None,
                              'batch_mode': <BatchMode.SM: 'SM'>,
                              'include_window_last_observed_in_schema': False,
+                             'step_through_stride': None,
+                             'include_subject_window_counts_in_batch': False,
                              '_target_': 'meds_torchdata.config.MEDSTorchDataConfig'},
                        group=None,
                        package=None,
@@ -170,6 +183,8 @@ class MEDSTorchDataConfig:
              'task_labels_dir': None,
              'batch_mode': <BatchMode.SM: 'SM'>,
              'include_window_last_observed_in_schema': False,
+             'step_through_stride': None,
+             'include_subject_window_counts_in_batch': False,
              '_target_': 'meds_torchdata.config.MEDSTorchDataConfig'}
             >>> from hydra.utils import instantiate
             >>> instantiate(cfg)
@@ -180,7 +195,9 @@ class MEDSTorchDataConfig:
                                 static_inclusion_mode=<StaticInclusionMode.INCLUDE: 'include'>,
                                 task_labels_dir=None,
                                 batch_mode=<BatchMode.SM: 'SM'>,
-                                include_window_last_observed_in_schema=False)
+                                include_window_last_observed_in_schema=False,
+                                step_through_stride=None,
+                                include_subject_window_counts_in_batch=False)
 
         Note that Hydra's CLI parameters with structured configs recognize that the `StrEnum` classes are
         enums, but fails to recognize that they accept lowercased names as the names of the class members are
@@ -216,7 +233,9 @@ class MEDSTorchDataConfig:
                                 static_inclusion_mode=<StaticInclusionMode.INCLUDE: 'include'>,
                                 task_labels_dir=None,
                                 batch_mode=<BatchMode.SM: 'SM'>,
-                                include_window_last_observed_in_schema=False)
+                                include_window_last_observed_in_schema=False,
+                                step_through_stride=None,
+                                include_subject_window_counts_in_batch=False)
 
         You can also add the config to a group
 
@@ -232,6 +251,8 @@ class MEDSTorchDataConfig:
                              'task_labels_dir': None,
                              'batch_mode': <BatchMode.SM: 'SM'>,
                              'include_window_last_observed_in_schema': False,
+                             'step_through_stride': None,
+                             'include_subject_window_counts_in_batch': False,
                              '_target_': 'meds_torchdata.config.MEDSTorchDataConfig'},
                        group='my_group/my_subgroup',
                        package=None,
@@ -289,6 +310,18 @@ class MEDSTorchDataConfig:
                     "not permitted! This is because there is no use-case we know of where you would want to "
                     "do this. If you disagree, please let us know via a GitHub issue."
                 )
+
+        if self.seq_sampling_strategy == SubsequenceSamplingStrategy.STEP_THROUGH:
+            if not isinstance(self.step_through_stride, int) or self.step_through_stride <= 0:
+                raise ValueError(
+                    "step_through_stride must be a positive integer when seq_sampling_strategy is "
+                    f"STEP_THROUGH; got {self.step_through_stride!r}."
+                )
+        elif self.step_through_stride is not None:
+            raise ValueError(
+                "step_through_stride may only be set when seq_sampling_strategy is STEP_THROUGH; "
+                f"got strategy {self.seq_sampling_strategy} with stride {self.step_through_stride!r}."
+            )
 
     @property
     def code_metadata_fp(self) -> Path:
@@ -399,6 +432,7 @@ class MEDSTorchDataConfig:
         data: JointNestedRaggedTensorDict,
         n_static_seq_els: int | None = None,
         rng: np.random.Generator | int | None = None,
+        explicit_window: tuple[int, int] | None = None,
     ) -> JointNestedRaggedTensorDict:
         """This processes the dynamic data for a subject, including subsampling and flattening.
 
@@ -581,6 +615,14 @@ class MEDSTorchDataConfig:
                 )
 
             max_seq_len -= n_static_seq_els
+
+        if explicit_window is not None:
+            # STEP_THROUGH hands us a pre-computed `(st, end)` window from the dataset-level
+            # expansion — honor it directly rather than asking the (non-deterministic) sampler.
+            st, end = explicit_window
+            st = max(0, st)
+            end = min(seq_len, end)
+            return data[st:end]
 
         st = self.seq_sampling_strategy.subsample_st_offset(seq_len, max_seq_len, rng=rng)
 

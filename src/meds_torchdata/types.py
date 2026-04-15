@@ -35,6 +35,13 @@ class SubsequenceSamplingStrategy(StrEnum):
         TO_END: Sample a subsequence from the end of the full sequence.
             Note this starts at the last element and moves back.
         FROM_START: Sample a subsequence from the start of the full sequence.
+        STEP_THROUGH: Deterministically walk through every permitted subsequence of the full
+            sequence in order, stepping by `MEDSTorchDataConfig.step_through_stride` elements.
+            Unlike the other strategies, this expands one subject into multiple dataset
+            elements (one per window), so `len(dataset)` grows for subjects with longer
+            sequences — the dataset logs a warning on startup about the resulting oversampling.
+            Start offsets are resolved at the dataset-expansion level, not via
+            `subsample_st_offset` (which raises `NotImplementedError` for this strategy).
 
     Methods:
         subsample_st_offset: Subsample starting offset based on maximum sequence length and sampling strategy.
@@ -46,6 +53,7 @@ class SubsequenceSamplingStrategy(StrEnum):
     RANDOM = "random"
     TO_END = "to_end"
     FROM_START = "from_start"
+    STEP_THROUGH = "step_through"
 
     def subsample_st_offset(
         self,
@@ -75,6 +83,14 @@ class SubsequenceSamplingStrategy(StrEnum):
             2
             >>> SubsequenceSamplingStrategy.RANDOM.subsample_st_offset(10, 10) is None
             True
+
+            `STEP_THROUGH` cannot be resolved via this method — it is handled at the dataset
+            level by expanding one subject into many windows — so calling it here errors:
+
+            >>> SubsequenceSamplingStrategy.STEP_THROUGH.subsample_st_offset(10, 5)
+            Traceback (most recent call last):
+                ...
+            NotImplementedError: STEP_THROUGH is resolved at the dataset-expansion level; ...
 
             The random sampler must be able to place the window flush against the end of the
             sequence (i.e. sample `st = seq_len - max_seq_len`, so that the last event at index
@@ -107,6 +123,12 @@ class SubsequenceSamplingStrategy(StrEnum):
                 return seq_len - max_seq_len
             case SubsequenceSamplingStrategy.FROM_START:
                 return 0
+            case SubsequenceSamplingStrategy.STEP_THROUGH:
+                raise NotImplementedError(
+                    "STEP_THROUGH is resolved at the dataset-expansion level; the dataset "
+                    "constructor pre-computes one (subject_id, window_start, window_end) index "
+                    "entry per window, so there is no single start offset to return here."
+                )
             case _:
                 raise ValueError(f"Invalid subsequence sampling strategy {self}!")
 
@@ -1243,6 +1265,11 @@ class MEDSTorchBatch:
     # Task label data elements (subject-level):
     boolean_value: torch.BoolTensor | None = None
 
+    # Optional oversampling weight for step-through sampling: for each sample, the number of
+    # dataset elements the originating subject expands into. Intended for per-sample loss
+    # reweighting (e.g. `loss_weight = 1 / n_subject_windows`). Shape: `[batch_size]`.
+    n_subject_windows: torch.LongTensor | None = None
+
     STATIC_TENSOR_NAMES: ClassVar[tuple[str]] = (
         "static_code",
         "static_numeric_value",
@@ -1329,6 +1356,9 @@ class MEDSTorchBatch:
 
         if self.has_labels:
             self.__check_shape("boolean_value", (self.batch_size,))
+
+        if self.n_subject_windows is not None:
+            self.__check_shape("n_subject_windows", (self.batch_size,))
 
     # Here we define some operators to make this behave like a dictionary:
     def __getitem__(self, key: str) -> torch.Tensor:
