@@ -1004,9 +1004,11 @@ class MEDSTorchBatch:
         │ │ │ boolean_value (torch.bool):
         │ │ │ │ [ True, False]
 
-    The batch will automatically validate tensor shapes, types, and presence vs. omission. In particular,
-    the code, numeric_value, numeric_value_mask, and time_delta_days tensors are required, and must be in
-    their correct types:
+    The batch will automatically validate tensor shapes, types, and presence vs. omission. `code` is the
+    only structurally required tensor (the batch's mode and shape are derived from it); every other dynamic
+    field — `numeric_value`, `numeric_value_mask`, `time_delta_days`, `event_mask` — is optional and
+    gated by `MEDSTorchDataConfig.include_numeric_value`, `include_time_delta`, and the batch mode (see
+    issues #46 and #47):
 
         >>> batch = MEDSTorchBatch()
         Traceback (most recent call last):
@@ -1020,22 +1022,6 @@ class MEDSTorchBatch:
         Traceback (most recent call last):
             ...
         TypeError: Field 'code' expected type <class 'torch.LongTensor'>, got type <class 'torch.Tensor'>.
-        >>> batch = MEDSTorchBatch(code=torch.tensor([1]))
-        Traceback (most recent call last):
-            ...
-        ValueError: Required tensor numeric_value is missing!
-        >>> batch = MEDSTorchBatch(code=torch.tensor([1]), numeric_value=torch.tensor([1.]))
-        Traceback (most recent call last):
-            ...
-        ValueError: Required tensor numeric_value_mask is missing!
-        >>> batch = MEDSTorchBatch(
-        ...     code=torch.tensor([1]),
-        ...     numeric_value=torch.tensor([1.]),
-        ...     numeric_value_mask=torch.tensor([True]),
-        ... )
-        Traceback (most recent call last):
-            ...
-        ValueError: Required tensor time_delta_days is missing!
 
     In addition, the shapes of the tensors must be consistent. To begin with, the code tensor's shape must
     correctly align with one of the allowed modes (SEM or SM):
@@ -1295,12 +1281,13 @@ class MEDSTorchBatch:
     """
 
     PAD_INDEX: ClassVar[int] = 0
-    _REQ_TENSORS: ClassVar[list[str]] = [
-        "code",
-        "numeric_value",
-        "numeric_value_mask",
-        "time_delta_days",
-    ]
+    # Only `code` is structurally required — every batch must have at least one code
+    # tensor to define the shape and mode of the batch. The other dynamic fields are
+    # optional and gated by `MEDSTorchDataConfig.include_numeric_value` (controlling
+    # `numeric_value` + `numeric_value_mask`) and `include_time_delta` (controlling
+    # `time_delta_days`); callers may also omit `event_mask` in SM mode. See issues
+    # #46 and #47.
+    _REQ_TENSORS: ClassVar[list[str]] = ["code"]
 
     # Core dynamic data elements (measurement-level):
     code: torch.LongTensor | None = None
@@ -1366,20 +1353,31 @@ class MEDSTorchBatch:
                         f"Field '{field.name}' expected type {tensor_type}, got type {type(value)}."
                     )
 
+        # Dynamic-field shape checks. `time_delta_days`, `numeric_value`, and
+        # `numeric_value_mask` are all optional now (see `_REQ_TENSORS` — gated by
+        # `MEDSTorchDataConfig.include_time_delta` and `include_numeric_value`), so we only
+        # check the shape of the ones the caller actually provided. `code` is always present
+        # and `event_mask` is required in SEM mode because it defines the per-event shape.
         match self.mode:
             case BatchMode.SEM:
                 if self.event_mask is None:
                     raise ValueError(f"Event mask must be provided in {self.mode} mode!")
-                self.__check_shape("time_delta_days", self._SE_shape)
+                if self.time_delta_days is not None:
+                    self.__check_shape("time_delta_days", self._SE_shape)
                 self.__check_shape("event_mask", self._SE_shape)
-                self.__check_shape("numeric_value", self._SEM_shape)
-                self.__check_shape("numeric_value_mask", self._SEM_shape)
+                if self.numeric_value is not None:
+                    self.__check_shape("numeric_value", self._SEM_shape)
+                if self.numeric_value_mask is not None:
+                    self.__check_shape("numeric_value_mask", self._SEM_shape)
             case BatchMode.SM:
                 if self.event_mask is not None:
                     raise ValueError(f"Event mask should not be provided in {self.mode} mode!")
-                self.__check_shape("time_delta_days", self._SM_shape)
-                self.__check_shape("numeric_value", self._SM_shape)
-                self.__check_shape("numeric_value_mask", self._SM_shape)
+                if self.time_delta_days is not None:
+                    self.__check_shape("time_delta_days", self._SM_shape)
+                if self.numeric_value is not None:
+                    self.__check_shape("numeric_value", self._SM_shape)
+                if self.numeric_value_mask is not None:
+                    self.__check_shape("numeric_value_mask", self._SM_shape)
             case _:  # pragma: no cover
                 raise ValueError(f"Invalid mode {self.mode}!")
 

@@ -75,6 +75,15 @@ class MEDSTorchDataConfig:
             per-sample loss reweighting (`1 / n_subject_windows`) to undo `STEP_THROUGH`
             oversampling — subjects with longer sequences get expanded into more windows, so
             reweighting by the inverse count restores a per-subject uniform loss.
+        include_numeric_value: When False, `MEDSPytorchDataset.collate` skips the
+            `numeric_value` and `numeric_value_mask` tensors entirely — the returned
+            `MEDSTorchBatch` has `None` for those fields. Useful for code-only /
+            categorical-only models that ignore numeric values, saving the per-batch GPU
+            transfer of two `[batch_size, seq_len (, event_len)]`-shaped tensors. Defaults
+            to True. See issue #46.
+        include_time_delta: When False, `MEDSPytorchDataset.collate` skips the
+            `time_delta_days` tensor. Useful for models that only consume the code stream and
+            don't care about inter-event timing. Defaults to True. See issue #47.
 
     Raises:
         FileNotFoundError: If the task_labels_dir or the tensorized_cohort_dir is not a valid directory.
@@ -284,6 +293,15 @@ class MEDSTorchDataConfig:
     step_through_overlap: int | None = None
     include_subject_window_counts_in_batch: bool = False
 
+    # Batch-field omission: every dynamic field ships in the collated batch by default, but
+    # downstream models that only care about `code` can opt out of the others to reduce
+    # batch memory / GPU transfer cost. Each flag also gates the corresponding per-sample
+    # processing in `collate`, so setting one to False removes the field from the returned
+    # `MEDSTorchBatch` entirely (the `MEDSTorchBatch` dataclass treats these fields as
+    # optional — see `_REQ_TENSORS`). See issues #46 (numeric) and #47 (time_delta).
+    include_numeric_value: bool = True
+    include_time_delta: bool = True
+
     @classmethod
     def add_to_config_store(cls, group: str | None = None):
         """Adds this class to the Hydra config store such that instantiation will create it natively.
@@ -307,6 +325,8 @@ class MEDSTorchDataConfig:
                              'step_through_stride': None,
                              'step_through_overlap': None,
                              'include_subject_window_counts_in_batch': False,
+                             'include_numeric_value': True,
+                             'include_time_delta': True,
                              '_target_': 'meds_torchdata.config.MEDSTorchDataConfig'},
                        group=None,
                        package=None,
@@ -333,6 +353,8 @@ class MEDSTorchDataConfig:
              'step_through_stride': None,
              'step_through_overlap': None,
              'include_subject_window_counts_in_batch': False,
+             'include_numeric_value': True,
+             'include_time_delta': True,
              '_target_': 'meds_torchdata.config.MEDSTorchDataConfig'}
             >>> from hydra.utils import instantiate
             >>> instantiate(cfg)
@@ -346,7 +368,9 @@ class MEDSTorchDataConfig:
                                 include_window_last_observed_in_schema=False,
                                 step_through_stride=None,
                                 step_through_overlap=None,
-                                include_subject_window_counts_in_batch=False)
+                                include_subject_window_counts_in_batch=False,
+                                include_numeric_value=True,
+                                include_time_delta=True)
 
         Note that Hydra's CLI parameters with structured configs recognize that the `StrEnum` classes are
         enums, but fails to recognize that they accept lowercased names as the names of the class members are
@@ -385,7 +409,9 @@ class MEDSTorchDataConfig:
                                 include_window_last_observed_in_schema=False,
                                 step_through_stride=None,
                                 step_through_overlap=None,
-                                include_subject_window_counts_in_batch=False)
+                                include_subject_window_counts_in_batch=False,
+                                include_numeric_value=True,
+                                include_time_delta=True)
 
         You can also add the config to a group
 
@@ -404,6 +430,8 @@ class MEDSTorchDataConfig:
                              'step_through_stride': None,
                              'step_through_overlap': None,
                              'include_subject_window_counts_in_batch': False,
+                             'include_numeric_value': True,
+                             'include_time_delta': True,
                              '_target_': 'meds_torchdata.config.MEDSTorchDataConfig'},
                        group='my_group/my_subgroup',
                        package=None,

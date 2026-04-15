@@ -1543,12 +1543,17 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         tensorized = {k: torch.as_tensor(v) for k, v in data.items()}
 
         out = {}
-        out["time_delta_days"] = torch.nan_to_num(tensorized.pop("time_delta_days"), nan=0).float()
         out["code"] = tensorized.pop("code").long()
         if self.config.batch_mode == BatchMode.SEM:
             out["event_mask"] = tensorized.pop("dim1/mask")
-        out["numeric_value_mask"] = ~torch.isnan(tensorized["numeric_value"])
-        out["numeric_value"] = torch.nan_to_num(tensorized.pop("numeric_value"), nan=0).float()
+        # Dynamic-field omission (issues #46 and #47): when the user opts out via config,
+        # drop the corresponding tensors from the batch entirely. Gating these with the
+        # same conditional keeps the hot path branch-free for the default (include both).
+        if self.config.include_time_delta:
+            out["time_delta_days"] = torch.nan_to_num(tensorized.pop("time_delta_days"), nan=0).float()
+        if self.config.include_numeric_value:
+            out["numeric_value_mask"] = ~torch.isnan(tensorized["numeric_value"])
+            out["numeric_value"] = torch.nan_to_num(tensorized.pop("numeric_value"), nan=0).float()
 
         match self.config.static_inclusion_mode:
             case StaticInclusionMode.OMIT:
@@ -1574,13 +1579,15 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                         static_mask = torch.zeros_like(out["event_mask"])
                         static_mask[:, 0] = True
                     case BatchMode.SM:
-                        static_mask = torch.arange(out["time_delta_days"].shape[1]).unsqueeze(
-                            0
-                        ) < torch.as_tensor(n_static_seq_els).unsqueeze(1)
-                        static_mask = static_mask.to(
-                            device=out["numeric_value_mask"].device,
-                            dtype=out["numeric_value_mask"].dtype,
-                        )
+                        # Use `out["code"]` for the shape / dtype reference rather than one
+                        # of the optional numeric/time fields, so that static_mask still
+                        # works when `include_numeric_value=False` or
+                        # `include_time_delta=False` drops those from the batch.
+                        seq_len_axis = out["code"].shape[1]
+                        static_mask = torch.arange(seq_len_axis).unsqueeze(0) < torch.as_tensor(
+                            n_static_seq_els
+                        ).unsqueeze(1)
+                        static_mask = static_mask.to(device=out["code"].device, dtype=torch.bool)
 
                 out["static_mask"] = static_mask
 
