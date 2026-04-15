@@ -16,6 +16,25 @@ importlib.reload(meds_torchdata.extensions)
 importlib.reload(meds_torchdata.pytest_plugin)
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--n-sampling-draws",
+        action="store",
+        default=20_000,
+        type=int,
+        help=(
+            "Number of draws to use in the per-event inclusion histogram tests for "
+            "SubsequenceSamplingStrategy. Increase if the tolerance-based asserts become "
+            "flaky under a tighter statistical budget, or decrease to speed up local runs."
+        ),
+    )
+
+
+@pytest.fixture(scope="session")
+def n_sampling_draws(pytestconfig: pytest.Config) -> int:
+    return int(pytestconfig.getoption("--n-sampling-draws"))
+
+
 if meds_torchdata.extensions._HAS_LIGHTNING:
     import meds_torchdata.extensions.lightning_datamodule
 
