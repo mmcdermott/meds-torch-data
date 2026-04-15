@@ -378,6 +378,18 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                 )
 
             stride = self._resolve_step_through_stride_for(subject_id, effective_window)
+            if stride <= 0:
+                # This only happens when `step_through_overlap` is set (it's relative to the
+                # per-subject effective window and can produce a non-positive stride if
+                # overlap >= effective_window). A plain stride is already validated to be
+                # positive at config time.
+                raise ValueError(
+                    f"step_through_overlap ({self.config.step_through_overlap}) must be "
+                    f"strictly less than the effective window width ({effective_window}) "
+                    f"for subject {subject_id}; got overlap >= effective window, which "
+                    "would produce a non-positive stride. Reduce step_through_overlap or "
+                    "increase max_seq_len."
+                )
             if stride > effective_window:
                 raise ValueError(
                     f"step_through stride ({stride}) exceeds the effective window width "
@@ -473,8 +485,6 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         becomes the `end` the loader reads from `self.index`, while the measurement-level
         end is returned separately for `self.step_through_meas_ends`.
         """
-
-        import numpy as np  # local import to avoid touching the module-level import list
 
         shard, subject_idx = self.subj_locations[subject_id]
         schema_row = self.schema_dfs_by_shard[shard][subject_idx]

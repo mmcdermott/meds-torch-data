@@ -40,6 +40,22 @@ def test_step_through_overlap_accepted(tensorized_MEDS_dataset):
     assert len(dataset) > 0
 
 
+def test_step_through_overlap_too_large_rejected(tensorized_MEDS_dataset):
+    # overlap >= effective_window would make the resolved stride non-positive, which would
+    # crash `range(..., step=0)` or silently produce an empty walk with step<0. The dataset
+    # must reject this at __init__ time with a clear error about the relationship between
+    # overlap and effective window width.
+    cfg = MEDSTorchDataConfig(
+        tensorized_cohort_dir=tensorized_MEDS_dataset,
+        max_seq_len=3,
+        seq_sampling_strategy="step_through",
+        step_through_overlap=3,  # == max_seq_len, so effective_window - overlap == 0
+        batch_mode="SEM",
+    )
+    with pytest.raises(ValueError, match=r"step_through_overlap .* must be strictly less than"):
+        MEDSPytorchDataset(cfg, split="train")
+
+
 def test_step_through_overlap_rejects_bool_and_negative(tensorized_MEDS_dataset):
     for bad in (True, False, -1):
         with pytest.raises(ValueError, match="step_through_overlap must be a non-negative integer"):
@@ -115,8 +131,9 @@ def test_step_through_expands_index_and_emits_warning(tensorized_MEDS_dataset, c
 
     # The warning fires *after* the expansion loop so the numbers it reports are the actual
     # observed per-subject window counts (in PREPEND mode with per-subject effective windows
-    # a closed-form formula in terms of `config.max_seq_len` would be misleading).
-    warning_messages = [rec.message for rec in caplog.records if rec.levelname == "WARNING"]
+    # a closed-form formula in terms of `config.max_seq_len` would be misleading). Use
+    # `getMessage()` rather than `.message` so %-format arg interpolation happens reliably.
+    warning_messages = [rec.getMessage() for rec in caplog.records if rec.levelname == "WARNING"]
     assert any("STEP_THROUGH sampling expanded" in msg for msg in warning_messages), (
         f"Expected oversampling warning on dataset __init__, got: {warning_messages}"
     )
