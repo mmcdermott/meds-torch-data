@@ -26,13 +26,63 @@ class MEDSTorchDataConfig:
     """A data class for storing configuration options for building a PyTorch dataset from a MEDS dataset.
 
     Attributes:
-        max_seq_len: The maximum length of sequences to yield from the dataset.
-        seq_sampling_strategy: The subsequence sampling strategy for the dataset.
+        tensorized_cohort_dir: Path to the root of a tokenized-and-tensorized MEDS cohort
+            produced by `MTD_preprocess`. The directory must contain `tokenization/schemas/`
+            and `data/` subdirectories.
+        max_seq_len: The maximum length (in the batch mode's natural unit — events in SEM
+            mode, measurements in SM mode) of sequences yielded from the dataset. Samplers
+            that produce fixed-width windows will use this as the width; `RANDOM` and
+            `BALANCED_RANDOM` treat it as the upper bound.
+        seq_sampling_strategy: The subsequence sampling strategy — one of
+            `SubsequenceSamplingStrategy.{RANDOM, BALANCED_RANDOM, TO_END, FROM_START,
+            STEP_THROUGH}`. Task-mode datasets (`task_labels_dir` set) are restricted to
+            `TO_END`.
+        padding_side: Which side of short sequences to pad when collating into a batch
+            (`LEFT` or `RIGHT`). Defaults to `RIGHT`; set to `LEFT` for autoregressive
+            generation models.
+        static_inclusion_mode: How to surface per-subject static measurements in the
+            collated batch — `OMIT` (drop), `INCLUDE` (separate `static_code`/`static_*`
+            tensors in the batch), or `PREPEND` (concatenate static elements onto the front
+            of the dynamic sequence). In `PREPEND` mode the effective dynamic window shrinks
+            to leave room for the static elements.
+        task_labels_dir: Optional path to a directory of MEDS Label parquet files. When set,
+            the dataset yields one sample per (subject, prediction_time) label with the
+            sampling strategy fixed to `TO_END`.
+        batch_mode: Whether the collated batch keeps the event/measurement structure
+            (`SEM` = Subject-Event-Measurement 3D tensors) or flattens measurements into a
+            single sequence dimension (`SM` = Subject-Measurement 2D tensors). The unit of
+            `max_seq_len` and every step-through parameter follows this choice.
+        include_window_last_observed_in_schema: When True, the `schema_df` helper adds a
+            `window_last_observed` column containing the timestamp of the last event included
+            in each window. Only meaningful for deterministic samplers (`TO_END`,
+            `FROM_START`); skipped for the random samplers because they have no deterministic
+            last event.
+        step_through_stride: Absolute number of sequence elements (events in SEM mode,
+            measurements in SM mode) to advance between consecutive `STEP_THROUGH` windows.
+            Must be a positive integer; `bool` is explicitly rejected even though it is a
+            subclass of `int`. Mutually exclusive with `step_through_overlap`: exactly one
+            of the two must be set when `seq_sampling_strategy == STEP_THROUGH`, and both
+            must be `None` for every other strategy.
+        step_through_overlap: Alternative to `step_through_stride` that specifies the number
+            of elements consecutive `STEP_THROUGH` windows should share. Equivalent to
+            `stride = effective_window - overlap`, but more convenient when the user wants
+            "no overlap" (`overlap=0`) or a fixed overlap because the effective window can
+            vary per subject in `SM + PREPEND`. Must be a non-negative integer strictly less
+            than the per-subject effective window.
+        include_subject_window_counts_in_batch: When True, `MEDSPytorchDataset.collate`
+            populates the `n_subject_windows` field of the returned `MEDSTorchBatch` with the
+            number of dataset elements each sample's subject expands into. Intended for
+            per-sample loss reweighting (`1 / n_subject_windows`) to undo `STEP_THROUGH`
+            oversampling — subjects with longer sequences get expanded into more windows, so
+            reweighting by the inverse count restores a per-subject uniform loss.
 
     Raises:
         FileNotFoundError: If the task_labels_dir or the tensorized_cohort_dir is not a valid directory.
         ValueError: If the subsequence sampling strategy or static inclusion mode is not valid.
         ValueError: If the task_labels_dir is specified but the subsequence sampling strategy is not TO_END.
+        ValueError: If `step_through_stride` / `step_through_overlap` is set without the
+            `STEP_THROUGH` strategy, if both are set simultaneously, or if either is an
+            invalid type (including `bool`) or out of range.
 
     Examples:
         >>> import tempfile
@@ -792,17 +842,18 @@ class MEDSTorchDataConfig:
 
             max_seq_len -= n_static_seq_els
 
-        if explicit_end is not None:
-            # STEP_THROUGH + SM passes the measurement-level end of the window directly, so
-            # we bypass the sampler and take `[end - max_seq_len : end]` of the flattened
-            # tensor. `max_seq_len` has already been reduced for PREPEND above.
-            end = explicit_end
-            st = end - max_seq_len
-        else:
-            st = self.seq_sampling_strategy.subsample_st_offset(seq_len, max_seq_len, rng=rng)
-            if st is None:
-                st = 0
-            end = st + max_seq_len
+        # `explicit_end` (set by `STEP_THROUGH` in `BatchMode.SM`) semantically means "don't
+        # go past this measurement". We can honor it by telling the sampler to act as if the
+        # sequence were truncated there — the `STEP_THROUGH → TO_END` delegation in
+        # `subsample_st_offset` then naturally returns `explicit_end - max_seq_len`, so the
+        # resulting window is `[explicit_end - max_seq_len, explicit_end)` without any
+        # sampler-bypass branch. `min(seq_len, ...)` guards against an over-ambitious caller.
+        effective_seq_len = min(seq_len, explicit_end) if explicit_end is not None else seq_len
+
+        st = self.seq_sampling_strategy.subsample_st_offset(effective_seq_len, max_seq_len, rng=rng)
+        if st is None:
+            st = 0
+        end = st + max_seq_len
 
         # Clamp the resulting slice: `BALANCED_RANDOM` can return a negative `st` so the
         # window overhangs the left boundary (yielding a uniform per-event inclusion

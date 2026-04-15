@@ -411,16 +411,8 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                     expanded_index.append((subject_id, event_end))
                     expanded_meas_ends.append(meas_end)
 
-        # Step-through is not allowed in task mode (the config enforces TO_END when a task is
-        # set) because labels correspond to specific end-of-window predictions that can't be
-        # remapped onto arbitrarily-placed mid-sequence windows. The check here makes the
-        # invariant explicit.
-        if self.has_task_labels:  # pragma: no cover -- prevented by MEDSTorchDataConfig validation
-            raise ValueError(
-                "STEP_THROUGH sampling is not compatible with task-mode datasets; labels "
-                "correspond to specific end-of-window predictions and cannot be mapped onto "
-                "arbitrarily-placed mid-sequence windows."
-            )
+        # (Task mode is already rejected at config time, since `task_labels_dir is not None`
+        # forces the sampling strategy to `TO_END`. No need to re-check here.)
 
         self.index = expanded_index
         self._windows_per_subject = windows_per_subject
@@ -451,6 +443,31 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         `config.step_through_overlap` is set instead, the stride is computed relative to the
         per-subject effective window so that consecutive windows share exactly the requested
         overlap regardless of how `PREPEND` shrinks the window for that subject.
+
+        Examples:
+            >>> import dataclasses
+            >>> stride_cfg = dataclasses.replace(
+            ...     sample_dataset_config,
+            ...     max_seq_len=3,
+            ...     seq_sampling_strategy="step_through",
+            ...     step_through_stride=2,
+            ...     batch_mode="SEM",
+            ...     static_inclusion_mode="omit",
+            ... )
+            >>> stride_pyd = MEDSPytorchDataset(stride_cfg, split="train")
+            >>> stride_pyd._resolve_step_through_stride_for(239684, effective_window=3)
+            2
+
+            With `step_through_overlap` the stride varies per subject to honor the
+            requested overlap count relative to that subject's effective window:
+
+            >>> overlap_cfg = dataclasses.replace(stride_cfg, step_through_stride=None,
+            ...                                   step_through_overlap=1)
+            >>> overlap_pyd = MEDSPytorchDataset(overlap_cfg, split="train")
+            >>> overlap_pyd._resolve_step_through_stride_for(239684, effective_window=3)
+            2
+            >>> overlap_pyd._resolve_step_through_stride_for(239684, effective_window=5)
+            4
         """
 
         if self.config.step_through_stride is not None:
@@ -464,6 +481,31 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         The first window ends at `effective_window` (so it contains `effective_window`
         events); subsequent windows each shift forward by `stride` events; the final window
         is anchored to `end_idx` so the last event is always covered regardless of stride.
+
+        Examples:
+            Typical overlapping walk: `end_idx=8, stride=2, effective_window=3` produces
+            windows ending at events `[3, 5, 7, 8]` — the last one is tail-anchored to
+            `end_idx` so the final event is always covered:
+
+            >>> MEDSPytorchDataset._step_through_event_ends_sem(8, stride=2, effective_window=3)
+            [3, 5, 7, 8]
+
+            Contiguous (`stride == effective_window`) walk:
+
+            >>> MEDSPytorchDataset._step_through_event_ends_sem(8, stride=3, effective_window=3)
+            [3, 6, 8]
+
+            Short subject (`end_idx <= effective_window`) — single window covering everything:
+
+            >>> MEDSPytorchDataset._step_through_event_ends_sem(3, stride=2, effective_window=3)
+            [3]
+            >>> MEDSPytorchDataset._step_through_event_ends_sem(2, stride=2, effective_window=3)
+            [2]
+
+            Stride-divides-gap — no duplicate tail anchor:
+
+            >>> MEDSPytorchDataset._step_through_event_ends_sem(7, stride=2, effective_window=3)
+            [3, 5, 7]
         """
 
         if end_idx <= effective_window:
@@ -484,6 +526,35 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         prefix contains it via `np.searchsorted` on the cumulative-measurement array — that
         becomes the `end` the loader reads from `self.index`, while the measurement-level
         end is returned separately for `self.step_through_meas_ends`.
+
+        Examples:
+            Subject 239684 in the `sample_dataset_config` fixture has 6 events flattening
+            to 11 measurements with per-event counts `[1, 3, 2, 2, 2, 1]`, so
+            `cum_meas = [0, 1, 4, 6, 8, 10, 11]`. With `effective_window=5, stride=3`, the
+            walk produces measurement ends `[5, 8, 11]`, each of which maps via
+            `searchsorted(cum_meas, meas_end, side="left")` to the smallest event index
+            whose prefix contains it. Note that window 2 (meas end `8`) maps to event `4`
+            because `cum_meas[4] == 8` exactly, while window 1 (meas end `5`) maps to event
+            `3` because `cum_meas[2] = 4 < 5 <= cum_meas[3] = 6`:
+
+            >>> import dataclasses
+            >>> sm_cfg = dataclasses.replace(
+            ...     sample_dataset_config,
+            ...     max_seq_len=5,
+            ...     seq_sampling_strategy="step_through",
+            ...     step_through_stride=3,
+            ...     batch_mode="SM",
+            ...     static_inclusion_mode="omit",
+            ... )
+            >>> sm_pyd = MEDSPytorchDataset(sm_cfg, split="train")
+            >>> sm_pyd._step_through_ends_sm(239684, stride=3, effective_window=5)
+            ([5, 8, 11], [3, 4, 6])
+
+            Short subject (total measurements `<= effective_window`) — single entry
+            covering the entire subject:
+
+            >>> sm_pyd._step_through_ends_sm(239684, stride=3, effective_window=20)
+            ([11], [6])
         """
 
         shard, subject_idx = self.subj_locations[subject_id]
@@ -517,9 +588,48 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         """Return the dynamic-window size a step-through sample can reserve for this subject.
 
         This mirrors the `max_seq_len -= n_static_seq_els` adjustment inside
-        `MEDSTorchDataConfig.process_dynamic_data` for PREPEND mode — so that the resulting
-        `[static; dynamic]` sample after prepending still has length `<= config.max_seq_len`.
-        For every other static inclusion mode this just returns `config.max_seq_len`.
+        `MEDSTorchDataConfig.process_dynamic_data` for `PREPEND` mode — so that the
+        resulting `[static; dynamic]` sample after prepending still has length
+        `<= config.max_seq_len`. For every other static inclusion mode this returns
+        `config.max_seq_len` unchanged. In `SM + PREPEND` the reduction varies per subject
+        because `n_static_seq_els == len(static_code[subject_id])`.
+
+        Examples:
+            With the default `sample_dataset_config` (`max_seq_len=10`, SM batch mode,
+            `static_inclusion_mode=INCLUDE`), the effective window equals `max_seq_len`
+            unchanged for every subject:
+
+            >>> pyd = sample_pytorch_dataset
+            >>> pyd.config.max_seq_len
+            10
+            >>> pyd.config.batch_mode
+            <BatchMode.SM: 'SM'>
+            >>> pyd.config.static_inclusion_mode
+            <StaticInclusionMode.INCLUDE: 'include'>
+            >>> [pyd._effective_max_seq_len_for(s) for s in (239684, 1195293, 68729, 814703)]
+            [10, 10, 10, 10]
+
+            In `SM + PREPEND` the reduction is `len(static_code)` per subject — every
+            fixture subject has two static codes, so their effective window shrinks from
+            `10` to `8`:
+
+            >>> import dataclasses
+            >>> sm_prepend_cfg = dataclasses.replace(
+            ...     pyd.config, static_inclusion_mode="prepend"
+            ... )
+            >>> sm_prepend_pyd = MEDSPytorchDataset(sm_prepend_cfg, split="train")
+            >>> [sm_prepend_pyd._effective_max_seq_len_for(s) for s in (239684, 1195293)]
+            [8, 8]
+
+            In `SEM + PREPEND` the reduction is a flat `1` (one event slot reserved for the
+            prepended static event):
+
+            >>> sem_prepend_cfg = dataclasses.replace(
+            ...     pyd.config, batch_mode="SEM", static_inclusion_mode="prepend"
+            ... )
+            >>> sem_prepend_pyd = MEDSPytorchDataset(sem_prepend_cfg, split="train")
+            >>> [sem_prepend_pyd._effective_max_seq_len_for(s) for s in (239684, 1195293)]
+            [9, 9]
         """
 
         max_seq_len = self.config.max_seq_len
