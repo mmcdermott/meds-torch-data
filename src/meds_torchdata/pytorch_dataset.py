@@ -1030,20 +1030,22 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             >>> std_col = (
             ...     (pl.col("values/sum_sqd")/pl.col("values/n_occurrences") - mean_col**2)**0.5
             ... ).alias("values/std")
-            >>> code_metadata.select("code", "code/vocab_index", mean_col, std_col)
+            >>> code_metadata.select(
+            ...     "code", "code/vocab_index", mean_col, std_col
+            ... ).sort("code/vocab_index")
             shape: (7, 4)
             ┌──────────────────────┬──────────────────┬─────────────┬────────────┐
             │ code                 ┆ code/vocab_index ┆ values/mean ┆ values/std │
             │ ---                  ┆ ---              ┆ ---         ┆ ---        │
             │ str                  ┆ u8               ┆ f32         ┆ f32        │
             ╞══════════════════════╪══════════════════╪═════════════╪════════════╡
+            │ ADMISSION//PULMONARY ┆ 3                ┆ NaN         ┆ NaN        │
             │ DISCHARGE            ┆ 4                ┆ NaN         ┆ NaN        │
             │ DOB                  ┆ 5                ┆ NaN         ┆ NaN        │
+            │ EYE_COLOR//HAZEL     ┆ 8                ┆ NaN         ┆ NaN        │
             │ HEIGHT               ┆ 9                ┆ 164.209732  ┆ 7.014076   │
             │ HR                   ┆ 10               ┆ 113.375     ┆ 18.912241  │
             │ TEMP                 ┆ 11               ┆ 98.458336   ┆ 1.933464   │
-            │ EYE_COLOR//HAZEL     ┆ 8                ┆ NaN         ┆ NaN        │
-            │ ADMISSION//PULMONARY ┆ 3                ┆ NaN         ┆ NaN        │
             └──────────────────────┴──────────────────┴─────────────┴────────────┘
 
             Note this is independent of the task data and the index; this only depends on the raw data on
