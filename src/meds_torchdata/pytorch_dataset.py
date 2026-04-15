@@ -230,10 +230,16 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         oversampling of subjects with longer sequences; set
         `config.include_subject_window_counts_in_batch=True` to surface per-sample window
         counts in the collated batch so downstream code can reweight losses.
+
+        When `static_inclusion_mode=PREPEND`, the effective window size is reduced by the
+        number of static sequence elements that will be prepended (1 event in SEM mode, or
+        `len(static_code)` measurements per subject in SM mode) so that the concatenated
+        [static; dynamic] sample still fits inside `config.max_seq_len`. This is the same
+        reduction applied by `MEDSTorchDataConfig.process_dynamic_data` for the other
+        sampling strategies.
         """
 
         stride = self.config.step_through_stride
-        window = self.config.max_seq_len
 
         expanded_index: list[tuple[int, int]] = []
         expanded_windows: list[tuple[int, int]] = []
@@ -251,6 +257,15 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
         for subject_id, end_idx in self.index:
             seq_len = self._step_through_seq_len_for(subject_id, end_idx)
+            window = self._effective_max_seq_len_for(subject_id)
+
+            if window <= 0:
+                raise ValueError(
+                    f"Effective dynamic window size for subject {subject_id} is {window} "
+                    f"(max_seq_len={self.config.max_seq_len} minus the static elements that "
+                    "will be prepended in PREPEND mode). Increase max_seq_len so at least one "
+                    "dynamic element fits after prepending static data."
+                )
 
             if seq_len <= window:
                 expanded_index.append((subject_id, end_idx))
@@ -297,9 +312,30 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             len({s for s, _ in expanded_index}),
             len(expanded_index),
             stride,
-            window,
+            self.config.max_seq_len,
             max(expanded_counts) if expanded_counts else 0,
         )
+
+    def _effective_max_seq_len_for(self, subject_id: int) -> int:
+        """Return the dynamic-window size a step-through sample can reserve for this subject.
+
+        This mirrors the `max_seq_len -= n_static_seq_els` adjustment inside
+        `MEDSTorchDataConfig.process_dynamic_data` for PREPEND mode — so that the resulting
+        `[static; dynamic]` sample after prepending still has length `<= config.max_seq_len`.
+        For every other static inclusion mode this just returns `config.max_seq_len`.
+        """
+
+        max_seq_len = self.config.max_seq_len
+        if self.config.static_inclusion_mode != StaticInclusionMode.PREPEND:
+            return max_seq_len
+        if self.config.batch_mode == BatchMode.SEM:
+            return max_seq_len - 1
+        # SM + PREPEND: the number of reserved slots is the per-subject static measurement
+        # count, read from the schema df without loading the dynamic tensors.
+        shard, subject_idx = self.subj_locations[subject_id]
+        static_code_list = self.schema_dfs_by_shard[shard][subject_idx]["static_code"].item()
+        n_static = len(static_code_list) if static_code_list is not None else 0
+        return max_seq_len - n_static
 
     def _step_through_seq_len_for(self, subject_id: int, end_idx: int) -> int:
         """Return the per-subject sequence length in the units used by `process_dynamic_data`.

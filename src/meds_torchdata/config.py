@@ -618,10 +618,13 @@ class MEDSTorchDataConfig:
 
         if explicit_window is not None:
             # STEP_THROUGH hands us a pre-computed `(st, end)` window from the dataset-level
-            # expansion — honor it directly rather than asking the (non-deterministic) sampler.
+            # expansion — honor it directly rather than asking the (non-deterministic) sampler,
+            # but still enforce the effective max sequence length (post `-= n_static_seq_els`
+            # reduction above) so PREPEND concatenation can never produce a sample longer than
+            # `config.max_seq_len`.
             st, end = explicit_window
             st = max(0, st)
-            end = min(seq_len, end)
+            end = min(seq_len, end, st + max_seq_len)
             return data[st:end]
 
         st = self.seq_sampling_strategy.subsample_st_offset(seq_len, max_seq_len, rng=rng)

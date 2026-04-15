@@ -158,6 +158,65 @@ def test_include_subject_window_counts_without_step_through(tensorized_MEDS_data
     assert torch.equal(batch.n_subject_windows, torch.ones(len(dataset), dtype=torch.long))
 
 
+@pytest.mark.parametrize("batch_mode", ["SEM", "SM"])
+def test_step_through_prepend_respects_max_seq_len(tensorized_MEDS_dataset, batch_mode):
+    """STEP_THROUGH + PREPEND must not produce samples longer than `config.max_seq_len`.
+
+    In PREPEND mode the collated sample is `[static; dynamic]`, so the dynamic window size
+    has to be reduced by the number of static elements being prepended. Prior to the fix the
+    step-through expansion precomputed windows of size `max_seq_len` regardless of mode,
+    which meant the concatenated `[static; dynamic]` sample could exceed `max_seq_len` when
+    `static_inclusion_mode=PREPEND`.
+    """
+
+    cfg = MEDSTorchDataConfig(
+        tensorized_cohort_dir=tensorized_MEDS_dataset,
+        max_seq_len=8,
+        seq_sampling_strategy="step_through",
+        step_through_stride=2,
+        batch_mode=batch_mode,
+        static_inclusion_mode="prepend",
+    )
+    dataset = MEDSPytorchDataset(cfg, split="train")
+
+    # Every single sample — after prepending static data — must have length <= max_seq_len.
+    for idx in range(len(dataset)):
+        sample = dataset[idx]
+        total_len = len(sample["dynamic"])
+        assert total_len <= cfg.max_seq_len, (
+            f"Sample {idx} total length {total_len} exceeds max_seq_len={cfg.max_seq_len} "
+            f"under batch_mode={batch_mode}, static_inclusion_mode=prepend"
+        )
+
+    # And the collated batch must also fit.
+    batch = dataset.collate([dataset[i] for i in range(len(dataset))])
+    seq_axis = batch.time_delta_days.shape[-1]
+    assert seq_axis <= cfg.max_seq_len, (
+        f"Collated batch shape {batch.time_delta_days.shape} exceeds max_seq_len={cfg.max_seq_len}"
+    )
+
+
+def test_step_through_prepend_effective_window_matches_reduction(tensorized_MEDS_dataset):
+    """The per-subject effective window is exactly `max_seq_len - n_static_seq_els`."""
+
+    cfg = MEDSTorchDataConfig(
+        tensorized_cohort_dir=tensorized_MEDS_dataset,
+        max_seq_len=8,
+        seq_sampling_strategy="step_through",
+        step_through_stride=2,
+        batch_mode="SM",
+        static_inclusion_mode="prepend",
+    )
+    dataset = MEDSPytorchDataset(cfg, split="train")
+
+    for subject_id, _ in set(dataset.index):
+        effective = dataset._effective_max_seq_len_for(subject_id)
+        shard, subj_idx = dataset.subj_locations[subject_id]
+        static_code_list = dataset.schema_dfs_by_shard[shard][subj_idx]["static_code"].item()
+        n_static = len(static_code_list) if static_code_list is not None else 0
+        assert effective == cfg.max_seq_len - n_static
+
+
 def test_step_through_sm_mode_uses_measurement_units(tensorized_MEDS_dataset):
     # In SM mode, the window must be computed in post-flatten measurement units, not in
     # events. We verify that explicitly by checking at least one returned window is as long
