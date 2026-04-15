@@ -335,10 +335,17 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                 DataSchema.subject_id_name, pl.col(DataSchema.time_name).list.len().alias(self.END_IDX)
             )
 
+        # `LAST_TIME` reflects the time of the last event the sampler will include. That only
+        # makes sense when the sampler deterministically ends at `end_idx - 1`; non-deterministic
+        # samplers (RANDOM, BALANCED_RANDOM) may end earlier, so skip the column for them.
+        nondeterministic_samplers = {
+            SubsequenceSamplingStrategy.RANDOM,
+            SubsequenceSamplingStrategy.BALANCED_RANDOM,
+        }
         if (
             self.config.include_window_last_observed_in_schema
             and self.has_task_index
-            and self.config.seq_sampling_strategy != SubsequenceSamplingStrategy.RANDOM
+            and self.config.seq_sampling_strategy not in nondeterministic_samplers
         ):
             df = (
                 df.join(base_df, on=DataSchema.subject_id_name, how="left", maintain_order="left")

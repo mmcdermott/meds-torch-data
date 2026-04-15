@@ -555,6 +555,40 @@ class MEDSTorchDataConfig:
             time_delta
             [6 7 0]
 
+            `balanced_random` lets the sliding window overhang the left or right edge of the
+            sequence, giving every event a uniform `max_seq_len / (seq_len + max_seq_len - 1)`
+            chance of being included. When the window overhangs a boundary, the returned slice
+            is *shorter* than `max_seq_len` — the collator pads to the longest element in the
+            batch downstream. Here `seq_len` is 14 (in SM mode the measurement tensor is
+            flattened first), `max_seq_len` is 3, so the start offset is drawn uniformly from
+            `{-2, -1, ..., 13}`.
+
+            >>> cfg = MEDSTorchDataConfig(".", max_seq_len=3, seq_sampling_strategy="balanced_random")
+            >>> pprint_dense(cfg.process_dynamic_data(data, rng=23).to_dense())
+            code
+            [10]
+            .
+            time_delta
+            [1]
+            >>> pprint_dense(cfg.process_dynamic_data(data, rng=30).to_dense())
+            code
+            [10 11]
+            .
+            time_delta
+            [1 0]
+            >>> pprint_dense(cfg.process_dynamic_data(data, rng=7).to_dense())
+            code
+            [73]
+            .
+            time_delta
+            [0]
+            >>> pprint_dense(cfg.process_dynamic_data(data, rng=9).to_dense())
+            code
+            [30 40 50]
+            .
+            time_delta
+            [3 4 5]
+
         If we pass in an invalid number of static sequence elements to reserve, we get an error.
 
             >>> cfg = MEDSTorchDataConfig(
@@ -588,4 +622,9 @@ class MEDSTorchDataConfig:
             st = 0
 
         end = min(seq_len, st + max_seq_len)
+        # `BALANCED_RANDOM` may return a negative start offset to let windows overhang the left
+        # boundary (yielding a uniform per-event inclusion distribution). Clamp the actual slice
+        # start to zero so we just return the (shorter) in-sequence portion; padding is handled
+        # by the collator downstream.
+        st = max(0, st)
         return data[st:end]
