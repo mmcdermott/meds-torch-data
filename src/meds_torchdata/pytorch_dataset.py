@@ -1037,13 +1037,13 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             │ ---                  ┆ ---              ┆ ---         ┆ ---        │
             │ str                  ┆ u8               ┆ f32         ┆ f32        │
             ╞══════════════════════╪══════════════════╪═════════════╪════════════╡
-            │ ADMISSION//PULMONARY ┆ 3                ┆ NaN         ┆ NaN        │
             │ DISCHARGE            ┆ 4                ┆ NaN         ┆ NaN        │
             │ DOB                  ┆ 5                ┆ NaN         ┆ NaN        │
-            │ EYE_COLOR//HAZEL     ┆ 8                ┆ NaN         ┆ NaN        │
             │ HEIGHT               ┆ 9                ┆ 164.209732  ┆ 7.014076   │
             │ HR                   ┆ 10               ┆ 113.375     ┆ 18.912241  │
             │ TEMP                 ┆ 11               ┆ 98.458336   ┆ 1.933464   │
+            │ EYE_COLOR//HAZEL     ┆ 8                ┆ NaN         ┆ NaN        │
+            │ ADMISSION//PULMONARY ┆ 3                ┆ NaN         ┆ NaN        │
             └──────────────────────┴──────────────────┴─────────────┴────────────┘
 
             Note this is independent of the task data and the index; this only depends on the raw data on

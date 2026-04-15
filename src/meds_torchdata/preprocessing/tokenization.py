@@ -209,7 +209,12 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
         )
     )
 
-    return static_by_subject.join(schema_by_subject, on="subject_id", how="full", coalesce=True)
+    # Sort after the full join so row order is deterministic; polars 1.39 no longer
+    # preserves the pre-join ordering for `how="full"`, so without an explicit sort
+    # the schema parquet shard-to-shard layout becomes polars-version-dependent.
+    return static_by_subject.join(schema_by_subject, on="subject_id", how="full", coalesce=True).sort(
+        "subject_id"
+    )
 
 
 def extract_seq_of_subject_events(df: pl.LazyFrame) -> pl.LazyFrame:
