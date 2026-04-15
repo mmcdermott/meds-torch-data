@@ -312,7 +312,14 @@ class MEDSTorchDataConfig:
                 )
 
         if self.seq_sampling_strategy == SubsequenceSamplingStrategy.STEP_THROUGH:
-            if not isinstance(self.step_through_stride, int) or self.step_through_stride <= 0:
+            # `bool` is a subclass of `int`, so `isinstance(True, int)` is `True`. Reject
+            # `bool` explicitly so `step_through_stride=True` doesn't silently behave like
+            # stride 1.
+            if (
+                isinstance(self.step_through_stride, bool)
+                or not isinstance(self.step_through_stride, int)
+                or self.step_through_stride <= 0
+            ):
                 raise ValueError(
                     "step_through_stride must be a positive integer when seq_sampling_strategy is "
                     f"STEP_THROUGH; got {self.step_through_stride!r}."

@@ -25,6 +25,19 @@ def test_step_through_requires_positive_stride(tensorized_MEDS_dataset):
         )
 
 
+def test_step_through_stride_rejects_bool(tensorized_MEDS_dataset):
+    # `bool` is a subclass of `int` in Python, so a naive `isinstance(x, int)` check would
+    # silently accept `True` / `False` as stride values. Config validation rejects them.
+    for bad_value in (True, False):
+        with pytest.raises(ValueError, match="step_through_stride must be a positive integer"):
+            MEDSTorchDataConfig(
+                tensorized_cohort_dir=tensorized_MEDS_dataset,
+                max_seq_len=3,
+                seq_sampling_strategy="step_through",
+                step_through_stride=bad_value,
+            )
+
+
 def test_step_through_stride_requires_step_through_strategy(tensorized_MEDS_dataset):
     with pytest.raises(ValueError, match="may only be set when seq_sampling_strategy is STEP_THROUGH"):
         MEDSTorchDataConfig(

@@ -583,7 +583,27 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         """
 
         subject_id, end_idx = self.index[idx]
-        dynamic_data, static_data = self.load_subject_data(subject_id=subject_id, st=0, end=end_idx)
+
+        # In SEM + step-through, the stored `(window_st, window_end)` is already in event
+        # units, so we can load only that event slice instead of reading the full `[0,
+        # end_idx)` prefix for every window of the same subject. This turns an `O(N *
+        # end_idx)` total read (for N windows per subject) into `O(N * window_size)`.
+        # In SM mode the window is in post-flatten measurement units, which can't be mapped
+        # back to an event range without loading the full prefix first, so step-through SM
+        # keeps the prefix-load path.
+        explicit_window: tuple[int, int] | None = None
+        if self.step_through_windows is not None and self.config.batch_mode == BatchMode.SEM:
+            window_st, window_end = self.step_through_windows[idx]
+            dynamic_data, static_data = self.load_subject_data(
+                subject_id=subject_id, st=window_st, end=window_end
+            )
+            # The loaded slice already *is* the window; tell `process_dynamic_data` to
+            # consume all of it (rebased to 0).
+            explicit_window = (0, window_end - window_st)
+        else:
+            dynamic_data, static_data = self.load_subject_data(subject_id=subject_id, st=0, end=end_idx)
+            if self.step_through_windows is not None:
+                explicit_window = self.step_through_windows[idx]
 
         match self.config.static_inclusion_mode:
             case StaticInclusionMode.OMIT:
@@ -598,8 +618,6 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             case StaticInclusionMode.PREPEND:
                 n_static_seq_els = len(static_data.code) if self.config.batch_mode == BatchMode.SM else 1
                 out = {"n_static_seq_els": n_static_seq_els}
-
-        explicit_window = self.step_through_windows[idx] if self.step_through_windows is not None else None
 
         dynamic_data = self.config.process_dynamic_data(
             dynamic_data,
