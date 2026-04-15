@@ -207,15 +207,17 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         )
         self.labels = self.schema_df[self.LABEL_COL] if self.has_task_labels else None
 
-        # Populated only when STEP_THROUGH sampling is active. For every index entry,
-        # `self.step_through_windows[i]` is a `(st, end)` slice applied to the dynamic data
-        # after the optional SM-mode flatten (so `st`, `end` are in events in SEM mode and in
-        # post-flatten measurements in SM mode). The number of dataset elements each subject
-        # expands into is cached as a simple `subject_id -> count` dict, which populates
-        # `MEDSTorchBatch.n_subject_windows` when
-        # `config.include_subject_window_counts_in_batch` is set.
-        self.step_through_windows: list[tuple[int, int]] | None = None
+        # STEP_THROUGH state:
+        # - `_windows_per_subject`: `subject_id -> number of dataset elements the subject
+        #   expands into`, populates `MEDSTorchBatch.n_subject_windows` when
+        #   `config.include_subject_window_counts_in_batch` is set.
+        # - `step_through_meas_ends`: parallel list to `self.index`, only populated in
+        #   `BatchMode.SM` step-through. Stores the measurement-level end of each window so
+        #   `process_dynamic_data` can slice mid-event via its `explicit_end` kwarg. `None`
+        #   in SEM mode because the event-level `end` in `self.index` plus TO_END sampling
+        #   is sufficient there.
         self._windows_per_subject: dict[int, int] | None = None
+        self.step_through_meas_ends: list[int] | None = None
         if self.config.seq_sampling_strategy == SubsequenceSamplingStrategy.STEP_THROUGH:
             self._expand_index_for_step_through()
 
@@ -223,23 +225,41 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         """Expand `self.index` so that STEP_THROUGH sampling produces one entry per window.
 
         For each subject in the pre-expansion index, this walks a sliding window of size
-        `max_seq_len` across the permitted sequence with stride `step_through_stride`,
-        producing one dataset element per window. In SEM mode, window/stride are in events and
-        `seq_len = end_idx` (already known from the schema). In SM mode, the dynamic data is
-        flattened first, so we must load each subject's dynamic data once to compute the true
-        per-subject measurement count before expansion. A warning is logged about the resulting
-        oversampling of subjects with longer sequences; set
+        `max_seq_len` across the permitted sequence with either a user-supplied
+        `step_through_stride` or a user-supplied `step_through_overlap`, producing one
+        dataset element per window.
+
+        The walk is expressed in the same unit as `max_seq_len`: events in `BatchMode.SEM`,
+        measurements in `BatchMode.SM`. In SM mode this means the window ends can fall
+        mid-event — for example a subject with two events [3, 5] measurements and
+        `max_seq_len=4` with `step_through_stride=2` produces windows `[0:4)`, `[2:6)`, and
+        `[4:8)` — the second window ends in the middle of the second event. This is the
+        intentional Design B semantics: step-through walks the **measurement-level** sequence
+        regardless of event atomicity. See the class docstring for alternatives.
+
+        The per-subject measurement-level walk is powered by `measurements_per_event`, a new
+        preprocessing column that records the measurement count at each unique timestamp for
+        each subject. In SM mode we use `np.searchsorted` on the per-subject cumulative sum
+        to find the smallest event index whose prefix contains each target measurement end —
+        that's the `end` stored in `self.index` (for `load_subject_data`) — while the
+        measurement-level end itself is recorded in `self.step_through_meas_ends` and passed
+        through `MEDSTorchDataConfig.process_dynamic_data`'s `explicit_end` kwarg at sample
+        time.
+
+        Validation at construction time:
+        - `stride` (or the derived `effective_window - overlap`) must be positive.
+        - `stride <= effective_window` per subject, so consecutive windows overlap by
+          `effective_window - stride >= 0` elements and no data is skipped.
+        - For SM mode, the `measurements_per_event` column must exist on the schema parquet
+          (re-run preprocessing if it's missing from an older cohort).
+
+        A warning with observed expansion stats is logged on startup; set
         `config.include_subject_window_counts_in_batch=True` to surface per-sample window
         counts in the collated batch so downstream code can reweight losses.
 
-        When `static_inclusion_mode=PREPEND`, the effective window size is reduced by the
-        number of static sequence elements that will be prepended (1 event in SEM mode, or
-        `len(static_code)` measurements per subject in SM mode) so that the concatenated
-        [static; dynamic] sample still fits inside `config.max_seq_len`. This is the same
-        reduction applied by `MEDSTorchDataConfig.process_dynamic_data` for the other
-        sampling strategies.
-
         Examples:
+            Example 1 — SEM mode, event-level walk:
+
             >>> import dataclasses
             >>> cfg = dataclasses.replace(
             ...     sample_dataset_config,
@@ -250,24 +270,26 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             ...     static_inclusion_mode="omit",
             ...     include_subject_window_counts_in_batch=True,
             ... )
-
-            `MEDSPytorchDataset.__init__` runs the expansion automatically. The four subjects
-            in the fixture have event counts of 6, 8, 3, and 3, so with window=3 and stride=2
-            the long subjects expand into multiple entries while the short ones contribute a
-            single window each:
-
             >>> pyd = MEDSPytorchDataset(cfg, split="train")
+
+            The four subjects in the fixture have event counts of 6, 8, 3, and 3. With
+            `max_seq_len=3, step_through_stride=2`, `self.index` has one entry per window —
+            each entry's `end` is the *window*'s final event. `self.step_through_meas_ends`
+            stays `None` in SEM mode because the sampler's `TO_END` semantics handle the
+            window end natively via event-level slicing.
+
             >>> pyd.index
-            [(239684, 6), (239684, 6), (239684, 6), (1195293, 8), (1195293, 8), (1195293, 8),
+            [(239684, 3), (239684, 5), (239684, 6), (1195293, 3), (1195293, 5), (1195293, 7),
              (1195293, 8), (68729, 3), (814703, 3)]
-            >>> pyd.step_through_windows
-            [(0, 3), (2, 5), (3, 6), (0, 3), (2, 5), (4, 7), (5, 8), (0, 3), (0, 3)]
+            >>> pyd.step_through_meas_ends is None
+            True
             >>> pyd._windows_per_subject
             {239684: 3, 1195293: 4, 68729: 1, 814703: 1}
 
-            Per-sample output carries the window count when the config flag is set, and the
-            `dynamic` payload at `pyd[idx]` is already the sliced window — no further random
-            subsampling is performed:
+            Per-sample output is the window and carries the per-subject window count when
+            the config flag is set. Sample 0 is subject 239684's first window — three events
+            starting at event 0 (note that the subject's static event has been prepended
+            into the code vocabulary as event ``5`` during preprocessing):
 
             >>> sample = pyd[0]
             >>> sample["n_subject_windows"]
@@ -277,61 +299,105 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                    [ 1, 10, 11],
                    [10, 11,  0]], dtype=uint8)
 
-            Collated batches surface `n_subject_windows` as a parallel tensor of shape
-            `[batch_size]`, intended for per-sample loss reweighting
-            (`1 / n_subject_windows` — subjects expanded into more windows are proportionally
-            downweighted to undo the sampling bias):
+            Collated batches surface `n_subject_windows` as a `[batch_size]` tensor — use
+            `1 / n_subject_windows` as a per-sample loss weight to undo oversampling:
 
             >>> batch = pyd.collate([pyd[0], pyd[1], pyd[7]])
             >>> batch.n_subject_windows
             tensor([3, 3, 1])
-            >>> (1.0 / batch.n_subject_windows.float()).tolist()
-            [0.3333333432674408, 0.3333333432674408, 1.0]
+
+            Example 2 — SM mode, measurement-level walk that crosses event boundaries:
+
+            SM mode interprets `max_seq_len` and stride as **measurements**, not events.
+            With `max_seq_len=5, step_through_stride=3`, subject 239684 (which has 6 events
+            flattening to a total of 11 measurements) produces three windows, each exactly
+            5 measurements wide: the first ends at measurement 5, the second at 8, the
+            third at the tail (11). The index stores the smallest event index whose prefix
+            contains each measurement-level end (used by `load_subject_data`), and
+            `self.step_through_meas_ends` stores the actual measurement-level ends that get
+            passed through `process_dynamic_data.explicit_end` at sample time:
+
+            >>> sm_cfg = dataclasses.replace(
+            ...     sample_dataset_config,
+            ...     max_seq_len=5,
+            ...     seq_sampling_strategy="step_through",
+            ...     step_through_stride=3,
+            ...     batch_mode="SM",
+            ...     static_inclusion_mode="omit",
+            ... )
+            >>> sm_pyd = MEDSPytorchDataset(sm_cfg, split="train")
+            >>> [entry for entry in sm_pyd.index if entry[0] == 239684]
+            [(239684, 3), (239684, 4), (239684, 6)]
+            >>> [
+            ...     meas_end for (subj, _), meas_end in
+            ...     zip(sm_pyd.index, sm_pyd.step_through_meas_ends, strict=True)
+            ...     if subj == 239684
+            ... ]
+            [5, 8, 11]
+
+            **The critical Design B property** — the second window (measurement end 8)
+            begins *in the middle of event 2* (events [0:1] contain 1+1=2 measurements,
+            event 2 begins at measurement position 2 and contains 3 measurements, so
+            measurement 3 is inside event 2). The window is exactly 5 measurements wide
+            regardless of where event boundaries fall:
+
+            >>> sm_pyd[1]["dynamic"].to_dense()["code"]
+            array([11, 10, 11, 10, 11], dtype=uint8)
+            >>> len(sm_pyd[1]["dynamic"])
+            5
+
+            And the third window (measurement end 11) is the subject's tail — also exactly
+            5 measurements wide:
+
+            >>> sm_pyd[2]["dynamic"].to_dense()["code"]
+            array([10, 11, 10, 11,  4], dtype=uint8)
+            >>> len(sm_pyd[2]["dynamic"])
+            5
         """
 
-        stride = self.config.step_through_stride
+        # 1. Compute the stride (possibly per-subject).
+        # 2. Walk window ends.
+        # 3. Validate stride <= effective_window per subject.
+        # 4. Emit the expanded index and (for SM) the parallel measurement-end list.
+
         n_subjects_before = len(self.index)
 
         expanded_index: list[tuple[int, int]] = []
-        expanded_windows: list[tuple[int, int]] = []
+        expanded_meas_ends: list[int] = []
         windows_per_subject: dict[int, int] = {}
 
         for subject_id, end_idx in self.index:
-            seq_len = self._step_through_seq_len_for(subject_id, end_idx)
-            window = self._effective_max_seq_len_for(subject_id)
-
-            if window <= 0:
+            effective_window = self._effective_max_seq_len_for(subject_id)
+            if effective_window <= 0:
                 raise ValueError(
-                    f"Effective dynamic window size for subject {subject_id} is {window} "
-                    f"(max_seq_len={self.config.max_seq_len} minus the static elements that "
-                    "will be prepended in PREPEND mode). Increase max_seq_len so at least one "
-                    "dynamic element fits after prepending static data."
+                    f"Effective dynamic window size for subject {subject_id} is "
+                    f"{effective_window} (max_seq_len={self.config.max_seq_len} minus the "
+                    "static elements that will be prepended in PREPEND mode). Increase "
+                    "max_seq_len so at least one dynamic element fits after prepending "
+                    "static data."
                 )
 
-            if seq_len <= window:
-                expanded_index.append((subject_id, end_idx))
-                expanded_windows.append((0, seq_len))
-                windows_per_subject[subject_id] = 1
-                continue
+            stride = self._resolve_step_through_stride_for(subject_id, effective_window)
+            if stride > effective_window:
+                raise ValueError(
+                    f"step_through stride ({stride}) exceeds the effective window width "
+                    f"({effective_window}) for subject {subject_id}, which would leave gaps "
+                    "in coverage. Either reduce step_through_stride or switch to "
+                    "step_through_overlap (which is relative to the effective window and "
+                    "cannot produce gaps)."
+                )
 
-            # First window starts at 0 and we step forward by `stride`; we stop once the next
-            # window would run past the end. The final window is explicitly anchored to
-            # `seq_len - window` so the last element is always covered regardless of stride.
-            starts: list[int] = []
-            st = 0
-            while st + window < seq_len:
-                starts.append(st)
-                st += stride
-            starts.append(seq_len - window)
-            # If the previous-to-last window already covers the end exactly, drop the explicit
-            # tail anchor to avoid emitting a duplicate window.
-            if len(starts) >= 2 and starts[-1] == starts[-2]:
-                starts.pop()
-
-            windows_per_subject[subject_id] = len(starts)
-            for window_st in starts:
-                expanded_index.append((subject_id, end_idx))
-                expanded_windows.append((window_st, window_st + window))
+            if self.config.batch_mode == BatchMode.SEM:
+                ends = self._step_through_event_ends_sem(end_idx, stride, effective_window)
+                windows_per_subject[subject_id] = len(ends)
+                for end in ends:
+                    expanded_index.append((subject_id, end))
+            else:  # SM mode
+                meas_ends, event_ends = self._step_through_ends_sm(subject_id, stride, effective_window)
+                windows_per_subject[subject_id] = len(meas_ends)
+                for event_end, meas_end in zip(event_ends, meas_ends, strict=True):
+                    expanded_index.append((subject_id, event_end))
+                    expanded_meas_ends.append(meas_end)
 
         # Step-through is not allowed in task mode (the config enforces TO_END when a task is
         # set) because labels correspond to specific end-of-window predictions that can't be
@@ -345,30 +411,97 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             )
 
         self.index = expanded_index
-        self.step_through_windows = expanded_windows
         self._windows_per_subject = windows_per_subject
+        self.step_through_meas_ends = expanded_meas_ends if self.config.batch_mode == BatchMode.SM else None
 
         # Oversampling warning — emitted after the expansion loop so the numbers we report
-        # are the actual observed stats rather than a closed-form guess. In PREPEND mode the
-        # effective dynamic window is `max_seq_len - n_static_seq_els` (and in SM+PREPEND that
-        # varies per subject), so the old closed-form formula in terms of `max_seq_len` was
-        # not the formula the expansion actually used.
+        # are the actual observed stats rather than a closed-form guess.
         n_elements = len(expanded_index)
         max_windows = max(windows_per_subject.values()) if windows_per_subject else 0
         mean_windows = n_elements / n_subjects_before if n_subjects_before else 0.0
         logger.warning(
-            "STEP_THROUGH sampling expanded %d subjects into %d dataset elements (stride=%d, "
-            "mean windows per subject=%.1f, max windows per subject=%d). Subjects with "
+            "STEP_THROUGH sampling expanded %d subjects into %d dataset elements "
+            "(mean windows per subject=%.1f, max windows per subject=%d). Subjects with "
             "longer dynamic sequences are oversampled relative to shorter ones by a factor "
             "equal to their per-subject window count. To undo the oversampling at loss time, "
             "set MEDSTorchDataConfig.include_subject_window_counts_in_batch=True and use "
             "`1 / batch.n_subject_windows` as a per-sample loss weight.",
             n_subjects_before,
             n_elements,
-            stride,
             mean_windows,
             max_windows,
         )
+
+    def _resolve_step_through_stride_for(self, subject_id: int, effective_window: int) -> int:
+        """Return the step-through stride (same unit as `max_seq_len`) for a given subject.
+
+        When `config.step_through_stride` is set directly, that value is used as-is. When
+        `config.step_through_overlap` is set instead, the stride is computed relative to the
+        per-subject effective window so that consecutive windows share exactly the requested
+        overlap regardless of how `PREPEND` shrinks the window for that subject.
+        """
+
+        if self.config.step_through_stride is not None:
+            return self.config.step_through_stride
+        return effective_window - self.config.step_through_overlap
+
+    @staticmethod
+    def _step_through_event_ends_sem(end_idx: int, stride: int, effective_window: int) -> list[int]:
+        """Return the list of event-level window ends for a SEM-mode step-through walk.
+
+        The first window ends at `effective_window` (so it contains `effective_window`
+        events); subsequent windows each shift forward by `stride` events; the final window
+        is anchored to `end_idx` so the last event is always covered regardless of stride.
+        """
+
+        if end_idx <= effective_window:
+            return [end_idx]
+        ends = list(range(effective_window, end_idx, stride))
+        if not ends or ends[-1] != end_idx:
+            ends.append(end_idx)
+        return ends
+
+    def _step_through_ends_sm(
+        self, subject_id: int, stride: int, effective_window: int
+    ) -> tuple[list[int], list[int]]:
+        """Return measurement- and event-level window ends for an SM-mode step-through walk.
+
+        Walks the measurement-level window ends `[effective_window, effective_window+stride,
+        ..., total_meas]` using the per-subject `measurements_per_event` list from the
+        schema. Each measurement-level end is converted to the smallest event index whose
+        prefix contains it via `np.searchsorted` on the cumulative-measurement array — that
+        becomes the `end` the loader reads from `self.index`, while the measurement-level
+        end is returned separately for `self.step_through_meas_ends`.
+        """
+
+        import numpy as np  # local import to avoid touching the module-level import list
+
+        shard, subject_idx = self.subj_locations[subject_id]
+        schema_row = self.schema_dfs_by_shard[shard][subject_idx]
+        if "measurements_per_event" not in schema_row.columns:
+            raise ValueError(
+                "STEP_THROUGH sampling in SM mode requires the `measurements_per_event` "
+                "column on the schema parquet, which older tensorized cohorts do not have. "
+                "Re-run preprocessing (`MTD_preprocess`) to produce it."
+            )
+        meas_per_event_series = schema_row["measurements_per_event"].item()
+        if meas_per_event_series is None:
+            # Subject with no dynamic data — single trivial window.
+            return [0], [0]
+        meas_per_event = meas_per_event_series.to_list()
+        cum_meas = np.cumsum([0, *meas_per_event])
+        total_meas = int(cum_meas[-1])
+
+        if total_meas <= effective_window:
+            # Subject is shorter than one window — emit a single entry covering everything.
+            return [total_meas], [len(meas_per_event)]
+
+        meas_ends = list(range(effective_window, total_meas, stride))
+        if not meas_ends or meas_ends[-1] != total_meas:
+            meas_ends.append(total_meas)
+
+        event_ends = np.searchsorted(cum_meas, meas_ends, side="left").tolist()
+        return meas_ends, [int(e) for e in event_ends]
 
     def _effective_max_seq_len_for(self, subject_id: int) -> int:
         """Return the dynamic-window size a step-through sample can reserve for this subject.
@@ -390,19 +523,6 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         static_code_list = self.schema_dfs_by_shard[shard][subject_idx]["static_code"].item()
         n_static = len(static_code_list) if static_code_list is not None else 0
         return max_seq_len - n_static
-
-    def _step_through_seq_len_for(self, subject_id: int, end_idx: int) -> int:
-        """Return the per-subject sequence length in the units used by `process_dynamic_data`.
-
-        In SEM mode this is just the event count (`end_idx`). In SM mode the dynamic tensor is
-        flattened before subsampling, so we have to load the subject's data once to compute
-        the post-flatten measurement count.
-        """
-
-        if self.config.batch_mode == BatchMode.SEM:
-            return int(end_idx)
-        dyn, _ = self.load_subject_data(subject_id=subject_id, st=0, end=end_idx)
-        return len(dyn.flatten())
 
     @property
     def labels_df(self) -> pl.DataFrame:
@@ -649,21 +769,19 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                 n_static_seq_els = len(static_data.code) if self.config.batch_mode == BatchMode.SM else 1
                 out = {"n_static_seq_els": n_static_seq_els}
 
-        if self.step_through_windows is None:
-            dynamic_data = self.config.process_dynamic_data(
-                dynamic_data, n_static_seq_els=n_static_seq_els, rng=seed
-            )
-        else:
-            # STEP_THROUGH pre-computes the slice bounds at `__init__` time (in events for
-            # SEM and post-flatten measurements for SM), so here we just do the mode-matching
-            # flatten and take the stored slice directly. Skipping `process_dynamic_data`
-            # avoids re-running its sampler for a window whose position is already decided.
-            # The slice width already reflects any `PREPEND` static-element reduction because
-            # the expansion logic uses `_effective_max_seq_len_for(subject_id)`.
-            if self.config.batch_mode == BatchMode.SM:
-                dynamic_data = dynamic_data.flatten()
-            slice_st, slice_end = self.step_through_windows[idx]
-            dynamic_data = dynamic_data[slice_st:slice_end]
+        # STEP_THROUGH in SM mode pre-computes the measurement-level window end for each
+        # sample (because events are not atomic in this mode — the window can terminate
+        # mid-event). We pass that through `process_dynamic_data.explicit_end`. In every
+        # other config (including SEM step-through), the expanded index's `end_event` is
+        # all we need: `process_dynamic_data` + the `STEP_THROUGH → TO_END` delegation in
+        # `subsample_st_offset` handles the window at the event level.
+        explicit_end = self.step_through_meas_ends[idx] if self.step_through_meas_ends is not None else None
+        dynamic_data = self.config.process_dynamic_data(
+            dynamic_data,
+            n_static_seq_els=n_static_seq_els,
+            rng=seed,
+            explicit_end=explicit_end,
+        )
 
         # Only leak the per-subject window count into the sample dict when the user has
         # explicitly asked for it in the batch — otherwise the sample API would depend on

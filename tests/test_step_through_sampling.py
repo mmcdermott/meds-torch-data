@@ -10,7 +10,9 @@ from meds_torchdata.types import SubsequenceSamplingStrategy
 
 
 def test_step_through_requires_positive_stride(tensorized_MEDS_dataset):
-    with pytest.raises(ValueError, match="step_through_stride must be a positive integer"):
+    with pytest.raises(
+        ValueError, match="Exactly one of step_through_stride or step_through_overlap must be set"
+    ):
         MEDSTorchDataConfig(
             tensorized_cohort_dir=tensorized_MEDS_dataset,
             max_seq_len=3,
@@ -22,6 +24,41 @@ def test_step_through_requires_positive_stride(tensorized_MEDS_dataset):
             max_seq_len=3,
             seq_sampling_strategy="step_through",
             step_through_stride=0,
+        )
+
+
+def test_step_through_overlap_accepted(tensorized_MEDS_dataset):
+    # `step_through_overlap=0` = contiguous windows; equivalent to stride == effective_window.
+    cfg = MEDSTorchDataConfig(
+        tensorized_cohort_dir=tensorized_MEDS_dataset,
+        max_seq_len=3,
+        seq_sampling_strategy="step_through",
+        step_through_overlap=0,
+        batch_mode="SEM",
+    )
+    dataset = MEDSPytorchDataset(cfg, split="train")
+    assert len(dataset) > 0
+
+
+def test_step_through_overlap_rejects_bool_and_negative(tensorized_MEDS_dataset):
+    for bad in (True, False, -1):
+        with pytest.raises(ValueError, match="step_through_overlap must be a non-negative integer"):
+            MEDSTorchDataConfig(
+                tensorized_cohort_dir=tensorized_MEDS_dataset,
+                max_seq_len=3,
+                seq_sampling_strategy="step_through",
+                step_through_overlap=bad,
+            )
+
+
+def test_step_through_stride_and_overlap_mutually_exclusive(tensorized_MEDS_dataset):
+    with pytest.raises(ValueError, match="Exactly one of step_through_stride or step_through_overlap"):
+        MEDSTorchDataConfig(
+            tensorized_cohort_dir=tensorized_MEDS_dataset,
+            max_seq_len=3,
+            seq_sampling_strategy="step_through",
+            step_through_stride=2,
+            step_through_overlap=1,
         )
 
 
@@ -48,9 +85,15 @@ def test_step_through_stride_requires_step_through_strategy(tensorized_MEDS_data
         )
 
 
-def test_step_through_subsample_st_offset_raises_not_implemented():
-    with pytest.raises(NotImplementedError, match="STEP_THROUGH is resolved at the dataset-expansion level"):
-        SubsequenceSamplingStrategy.STEP_THROUGH.subsample_st_offset(10, 3)
+def test_step_through_subsample_st_offset_delegates_to_to_end():
+    # STEP_THROUGH delegates to TO_END semantics at the sampler level: the dataset has
+    # already modified the index to point to the right prefix endpoint, and the sampler
+    # takes the last `max_seq_len` elements of it.
+    assert SubsequenceSamplingStrategy.STEP_THROUGH.subsample_st_offset(10, 3) == 7
+    assert SubsequenceSamplingStrategy.STEP_THROUGH.subsample_st_offset(10, 3) == (
+        SubsequenceSamplingStrategy.TO_END.subsample_st_offset(10, 3)
+    )
+    assert SubsequenceSamplingStrategy.STEP_THROUGH.subsample_st_offset(5, 10) is None
 
 
 def _step_through_cfg(tensorized_MEDS_dataset, **kwargs):
@@ -85,55 +128,55 @@ def test_step_through_expands_index_and_emits_warning(tensorized_MEDS_dataset, c
     # as there are subjects; subjects with long sequences should contribute more than one.
     n_subjects = len({s for s, _ in dataset.index})
     assert len(dataset) >= n_subjects
-    assert dataset.step_through_windows is not None
-    assert len(dataset.step_through_windows) == len(dataset)
     assert dataset._windows_per_subject is not None
     assert set(dataset._windows_per_subject) == {s for s, _ in dataset.index}
+    # Parallel meas-ends list is `None` in SEM mode (events are atomic there, and the
+    # index's event-level `end` plus TO_END sampling suffices).
+    assert dataset.step_through_meas_ends is None
 
     # At least one subject must have been expanded into more than one window for the test
     # to be meaningful.
     assert max(dataset._windows_per_subject.values()) > 1
 
     # Consecutive entries belonging to the same subject must have strictly non-decreasing
-    # window starts (deterministic ordered walk).
+    # window ends (deterministic ordered walk).
     last_subject = None
-    last_st = -1
-    for (subject_id, _), (st, _) in zip(dataset.index, dataset.step_through_windows, strict=True):
+    last_end = -1
+    for subject_id, end in dataset.index:
         if subject_id != last_subject:
             last_subject = subject_id
-            last_st = st
+            last_end = end
             continue
-        assert st >= last_st, f"Window starts must be monotonically non-decreasing for subject {subject_id}"
-        last_st = st
+        assert end >= last_end, f"Window ends must be monotonically non-decreasing for subject {subject_id}"
+        last_end = end
 
 
 def test_step_through_walks_all_events_at_least_once(tensorized_MEDS_dataset):
-    # stride = max_seq_len -> non-overlapping walk; every event should appear exactly once
-    # except the tail, which may appear twice because the last window is anchored to `seq_len`.
+    # `step_through_overlap=0` -> contiguous non-overlapping walk in events. Every event
+    # from 0 to the subject's end must appear in at least one window's effective range.
     cfg = MEDSTorchDataConfig(
         tensorized_cohort_dir=tensorized_MEDS_dataset,
         max_seq_len=3,
         seq_sampling_strategy="step_through",
-        step_through_stride=3,
+        step_through_overlap=0,
         batch_mode="SEM",
     )
     dataset = MEDSPytorchDataset(cfg, split="train")
 
-    # Group windows by subject and verify every event up to end_idx is covered.
-    per_subject: dict[int, list[tuple[int, int]]] = {}
-    for (subject_id, _end_idx), window in zip(dataset.index, dataset.step_through_windows, strict=True):
-        per_subject.setdefault(subject_id, []).append((window[0], window[1]))
+    # Group index entries by subject. In SEM mode, each index entry's `end` is the event
+    # end of the window, and the window contains events [max(0, end - effective_window), end).
+    per_subject: dict[int, list[int]] = {}
+    for subject_id, end in dataset.index:
+        per_subject.setdefault(subject_id, []).append(end)
 
-    for subject_id, windows in per_subject.items():
-        covered = set()
-        for st, end in windows:
-            covered.update(range(max(0, st), end))
-        # Determine the sequence length this subject should cover: the common end_idx across
-        # rows (we reuse `dataset._step_through_seq_len_for` via the dataset API).
-        end_idx = next(e for s, e in dataset.index if s == subject_id)
-        expected = dataset._step_through_seq_len_for(subject_id, end_idx)
-        # Every in-range event must appear in at least one window.
-        for pos in range(expected):
+    for subject_id, ends in per_subject.items():
+        effective_window = dataset._effective_max_seq_len_for(subject_id)
+        covered: set[int] = set()
+        for end in ends:
+            covered.update(range(max(0, end - effective_window), end))
+        # The subject's full event range must be covered (including the tail-anchored window).
+        max_end = max(ends)
+        for pos in range(max_end):
             assert pos in covered, f"Event {pos} for subject {subject_id} not covered"
 
 

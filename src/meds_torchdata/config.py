@@ -106,18 +106,33 @@ class MEDSTorchDataConfig:
             ...
         ValueError: Invalid static inclusion mode: foobar
 
-        STEP_THROUGH sampling requires a positive integer ``step_through_stride``. A missing,
-        zero, negative, or non-int stride raises. ``bool`` is explicitly rejected because it is
-        a subclass of ``int`` in Python (so ``isinstance(True, int)`` would otherwise silently
-        accept it as stride 1):
+        STEP_THROUGH sampling requires exactly one of ``step_through_stride`` (elements to
+        advance between consecutive windows) or ``step_through_overlap`` (elements consecutive
+        windows should share). Both are in the same unit as ``max_seq_len`` — events in SEM
+        mode, measurements in SM mode. Leaving both unset, or setting both, raises:
 
         >>> MEDSTorchDataConfig(
         ...     tensorized_cohort_dir=".", max_seq_len=3, seq_sampling_strategy="step_through"
         ... )
         Traceback (most recent call last):
             ...
-        ValueError: step_through_stride must be a positive integer when seq_sampling_strategy is
-        STEP_THROUGH; got None.
+        ValueError: Exactly one of step_through_stride or step_through_overlap must be set when
+        seq_sampling_strategy is STEP_THROUGH; got step_through_stride=None,
+        step_through_overlap=None.
+        >>> MEDSTorchDataConfig(
+        ...     tensorized_cohort_dir=".", max_seq_len=3, seq_sampling_strategy="step_through",
+        ...     step_through_stride=2, step_through_overlap=1,
+        ... )
+        Traceback (most recent call last):
+            ...
+        ValueError: Exactly one of step_through_stride or step_through_overlap must be set when
+        seq_sampling_strategy is STEP_THROUGH; got step_through_stride=2,
+        step_through_overlap=1.
+
+        ``step_through_stride`` must be a positive integer. Zero / negative / non-int values
+        are rejected, and ``bool`` is explicitly rejected because it is a subclass of ``int``
+        in Python (so ``isinstance(True, int)`` would otherwise silently accept it as stride 1):
+
         >>> MEDSTorchDataConfig(
         ...     tensorized_cohort_dir=".", max_seq_len=3, seq_sampling_strategy="step_through",
         ...     step_through_stride=0,
@@ -135,9 +150,29 @@ class MEDSTorchDataConfig:
         ValueError: step_through_stride must be a positive integer when seq_sampling_strategy is
         STEP_THROUGH; got True.
 
-        Conversely, setting ``step_through_stride`` with any other strategy is also rejected,
-        because the field has no effect outside STEP_THROUGH and silently accepting it would
-        mask configuration mistakes:
+        ``step_through_overlap`` must be a non-negative integer (``0`` = contiguous
+        non-overlapping windows). ``bool`` is again explicitly rejected:
+
+        >>> MEDSTorchDataConfig(
+        ...     tensorized_cohort_dir=".", max_seq_len=3, seq_sampling_strategy="step_through",
+        ...     step_through_overlap=-1,
+        ... )
+        Traceback (most recent call last):
+            ...
+        ValueError: step_through_overlap must be a non-negative integer when seq_sampling_strategy
+        is STEP_THROUGH; got -1.
+        >>> MEDSTorchDataConfig(
+        ...     tensorized_cohort_dir=".", max_seq_len=3, seq_sampling_strategy="step_through",
+        ...     step_through_overlap=True,
+        ... )
+        Traceback (most recent call last):
+            ...
+        ValueError: step_through_overlap must be a non-negative integer when seq_sampling_strategy
+        is STEP_THROUGH; got True.
+
+        Conversely, setting ``step_through_stride`` or ``step_through_overlap`` with any other
+        strategy is also rejected, because the fields have no effect outside STEP_THROUGH and
+        silently accepting them would mask configuration mistakes:
 
         >>> MEDSTorchDataConfig(
         ...     tensorized_cohort_dir=".", max_seq_len=3, seq_sampling_strategy="random",
@@ -147,6 +182,14 @@ class MEDSTorchDataConfig:
             ...
         ValueError: step_through_stride may only be set when seq_sampling_strategy is STEP_THROUGH;
         got strategy random with stride 2.
+        >>> MEDSTorchDataConfig(
+        ...     tensorized_cohort_dir=".", max_seq_len=3, seq_sampling_strategy="random",
+        ...     step_through_overlap=0,
+        ... )
+        Traceback (most recent call last):
+            ...
+        ValueError: step_through_overlap may only be set when seq_sampling_strategy is STEP_THROUGH;
+        got strategy random with overlap 0.
     """
 
     # MEDS Dataset Information
@@ -169,15 +212,26 @@ class MEDSTorchDataConfig:
     # Extra output
     include_window_last_observed_in_schema: bool = False
 
-    # STEP_THROUGH sampling-specific options.
-    # - `step_through_stride`: stride (in sequence elements, matching the units of `max_seq_len`)
-    #   between consecutive windows. Must be a positive integer when `seq_sampling_strategy ==
-    #   STEP_THROUGH`. Must be `None` for all other strategies.
+    # STEP_THROUGH sampling-specific options. Exactly one of `step_through_stride` or
+    # `step_through_overlap` must be set when `seq_sampling_strategy == STEP_THROUGH`; both
+    # must be `None` for all other strategies. Both are specified in the same unit as
+    # `max_seq_len` — events in SEM mode, measurements in SM mode.
+    #
+    # - `step_through_stride`: the number of sequence elements to advance between consecutive
+    #   windows. Must be a positive integer `<=` the effective window width (otherwise some
+    #   elements would be skipped between windows); validated at dataset construction time
+    #   because the effective window can vary per subject in SM+PREPEND mode.
+    # - `step_through_overlap`: the number of sequence elements consecutive windows should
+    #   share. Equivalent to `stride = effective_window - overlap`, but more convenient when
+    #   the user wants "no overlap" (`overlap=0`) or "overlap by N" without having to think
+    #   about the effective window. Must be a non-negative integer strictly less than the
+    #   effective window.
     # - `include_subject_window_counts_in_batch`: when True, the collated `MEDSTorchBatch` will
     #   populate its `n_subject_windows` tensor (shape `[batch_size]`) with the number of
     #   dataset elements each sample's subject expands into, so downstream losses can reweight
     #   by `1 / n_subject_windows` to undo step-through oversampling of long sequences.
     step_through_stride: int | None = None
+    step_through_overlap: int | None = None
     include_subject_window_counts_in_batch: bool = False
 
     @classmethod
@@ -201,6 +255,7 @@ class MEDSTorchDataConfig:
                              'batch_mode': <BatchMode.SM: 'SM'>,
                              'include_window_last_observed_in_schema': False,
                              'step_through_stride': None,
+                             'step_through_overlap': None,
                              'include_subject_window_counts_in_batch': False,
                              '_target_': 'meds_torchdata.config.MEDSTorchDataConfig'},
                        group=None,
@@ -226,6 +281,7 @@ class MEDSTorchDataConfig:
              'batch_mode': <BatchMode.SM: 'SM'>,
              'include_window_last_observed_in_schema': False,
              'step_through_stride': None,
+             'step_through_overlap': None,
              'include_subject_window_counts_in_batch': False,
              '_target_': 'meds_torchdata.config.MEDSTorchDataConfig'}
             >>> from hydra.utils import instantiate
@@ -239,6 +295,7 @@ class MEDSTorchDataConfig:
                                 batch_mode=<BatchMode.SM: 'SM'>,
                                 include_window_last_observed_in_schema=False,
                                 step_through_stride=None,
+                                step_through_overlap=None,
                                 include_subject_window_counts_in_batch=False)
 
         Note that Hydra's CLI parameters with structured configs recognize that the `StrEnum` classes are
@@ -277,6 +334,7 @@ class MEDSTorchDataConfig:
                                 batch_mode=<BatchMode.SM: 'SM'>,
                                 include_window_last_observed_in_schema=False,
                                 step_through_stride=None,
+                                step_through_overlap=None,
                                 include_subject_window_counts_in_batch=False)
 
         You can also add the config to a group
@@ -294,6 +352,7 @@ class MEDSTorchDataConfig:
                              'batch_mode': <BatchMode.SM: 'SM'>,
                              'include_window_last_observed_in_schema': False,
                              'step_through_stride': None,
+                             'step_through_overlap': None,
                              'include_subject_window_counts_in_batch': False,
                              '_target_': 'meds_torchdata.config.MEDSTorchDataConfig'},
                        group='my_group/my_subgroup',
@@ -354,10 +413,19 @@ class MEDSTorchDataConfig:
                 )
 
         if self.seq_sampling_strategy == SubsequenceSamplingStrategy.STEP_THROUGH:
+            # Exactly one of `step_through_stride` or `step_through_overlap` must be set.
+            n_set = (self.step_through_stride is not None) + (self.step_through_overlap is not None)
+            if n_set != 1:
+                raise ValueError(
+                    "Exactly one of step_through_stride or step_through_overlap must be set when "
+                    "seq_sampling_strategy is STEP_THROUGH; got "
+                    f"step_through_stride={self.step_through_stride!r}, "
+                    f"step_through_overlap={self.step_through_overlap!r}."
+                )
             # `bool` is a subclass of `int`, so `isinstance(True, int)` is `True`. Reject
             # `bool` explicitly so `step_through_stride=True` doesn't silently behave like
-            # stride 1.
-            if (
+            # stride 1 (or `step_through_overlap=True` like overlap 1).
+            if self.step_through_stride is not None and (
                 isinstance(self.step_through_stride, bool)
                 or not isinstance(self.step_through_stride, int)
                 or self.step_through_stride <= 0
@@ -366,11 +434,26 @@ class MEDSTorchDataConfig:
                     "step_through_stride must be a positive integer when seq_sampling_strategy is "
                     f"STEP_THROUGH; got {self.step_through_stride!r}."
                 )
-        elif self.step_through_stride is not None:
-            raise ValueError(
-                "step_through_stride may only be set when seq_sampling_strategy is STEP_THROUGH; "
-                f"got strategy {self.seq_sampling_strategy} with stride {self.step_through_stride!r}."
-            )
+            if self.step_through_overlap is not None and (
+                isinstance(self.step_through_overlap, bool)
+                or not isinstance(self.step_through_overlap, int)
+                or self.step_through_overlap < 0
+            ):
+                raise ValueError(
+                    "step_through_overlap must be a non-negative integer when seq_sampling_strategy "
+                    f"is STEP_THROUGH; got {self.step_through_overlap!r}."
+                )
+        else:
+            if self.step_through_stride is not None:
+                raise ValueError(
+                    "step_through_stride may only be set when seq_sampling_strategy is STEP_THROUGH; "
+                    f"got strategy {self.seq_sampling_strategy} with stride {self.step_through_stride!r}."
+                )
+            if self.step_through_overlap is not None:
+                raise ValueError(
+                    "step_through_overlap may only be set when seq_sampling_strategy is STEP_THROUGH; "
+                    f"got strategy {self.seq_sampling_strategy} with overlap {self.step_through_overlap!r}."
+                )
 
     @property
     def code_metadata_fp(self) -> Path:
@@ -481,6 +564,7 @@ class MEDSTorchDataConfig:
         data: JointNestedRaggedTensorDict,
         n_static_seq_els: int | None = None,
         rng: np.random.Generator | int | None = None,
+        explicit_end: int | None = None,
     ) -> JointNestedRaggedTensorDict:
         """This processes the dynamic data for a subject, including subsampling and flattening.
 
@@ -491,6 +575,16 @@ class MEDSTorchDataConfig:
                 `None`.
             rng: The random seed to use for subsequence sampling. If `None`, the default rng is used. If an
                 integer, a new rng is created with that seed.
+            explicit_end: An optional measurement-level end index for the window. When set,
+                `process_dynamic_data` returns
+                `data[max(0, explicit_end - effective_max_seq_len) : explicit_end]` after the
+                mode-appropriate flatten, bypassing the sampler entirely. This is the
+                `STEP_THROUGH`+`BatchMode.SM` path: the dataset's index expansion pre-computes
+                per-window measurement ends that can terminate mid-event, and passes each
+                one through here so the window is measurement-level precise regardless of how
+                many measurements an event has. `None` for every other caller — including
+                `STEP_THROUGH` in SEM mode, which goes through the normal
+                `STEP_THROUGH → TO_END` sampler path.
 
         Returns:
             The processed dynamic data, still in a `JointNestedRaggedTensorDict` format.
@@ -698,10 +792,17 @@ class MEDSTorchDataConfig:
 
             max_seq_len -= n_static_seq_els
 
-        st = self.seq_sampling_strategy.subsample_st_offset(seq_len, max_seq_len, rng=rng)
-        if st is None:
-            st = 0
-        end = st + max_seq_len
+        if explicit_end is not None:
+            # STEP_THROUGH + SM passes the measurement-level end of the window directly, so
+            # we bypass the sampler and take `[end - max_seq_len : end]` of the flattened
+            # tensor. `max_seq_len` has already been reduced for PREPEND above.
+            end = explicit_end
+            st = end - max_seq_len
+        else:
+            st = self.seq_sampling_strategy.subsample_st_offset(seq_len, max_seq_len, rng=rng)
+            if st is None:
+                st = 0
+            end = st + max_seq_len
 
         # Clamp the resulting slice: `BALANCED_RANDOM` can return a negative `st` so the
         # window overhangs the left boundary (yielding a uniform per-event inclusion

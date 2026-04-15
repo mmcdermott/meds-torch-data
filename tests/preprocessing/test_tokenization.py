@@ -144,6 +144,10 @@ SCHEMAS_SCHEMA = {
     "static_numeric_value": pl.List(NORMALIZED_MEDS_SCHEMA["numeric_value"]),
     "start_time": NORMALIZED_MEDS_SCHEMA["time"],
     "time": pl.List(NORMALIZED_MEDS_SCHEMA["time"]),
+    # Parallel to `time` — number of raw measurement rows at each unique timestamp. Used
+    # by STEP_THROUGH sampling in SM mode to map measurement-level window ends back to
+    # event-level indices without re-loading the dynamic tensor.
+    "measurements_per_event": pl.List(pl.UInt32),
 }
 
 SEQ_SCHEMA = {
@@ -173,6 +177,13 @@ TRAIN_0_TIMES = [
         datetime(2010, 6, 20, 20, 50, 4),
     ],
 ]
+TRAIN_0_MEASUREMENTS_PER_EVENT = [
+    # Subject 239684: DOB (1), [1,10,11] (3), [10,11] (2), [10,11] (2), [10,11] (2), [4] (1)
+    [1, 3, 2, 2, 2, 1],
+    # Subject 1195293: DOB (1), [1,10,11] (3), then five [10,11] pairs (2 each), [4] (1)
+    [1, 3, 2, 2, 2, 2, 2, 1],
+]
+
 WANT_SCHEMAS_TRAIN_0 = pl.DataFrame(
     {
         "subject_id": [239684, 1195293],
@@ -183,6 +194,7 @@ WANT_SCHEMAS_TRAIN_0 = pl.DataFrame(
         ],
         "start_time": [ts[0] for ts in TRAIN_0_TIMES],
         "time": TRAIN_0_TIMES,
+        "measurements_per_event": TRAIN_0_MEASUREMENTS_PER_EVENT,
     },
     schema=SCHEMAS_SCHEMA,
 )
@@ -194,6 +206,7 @@ WANT_SCHEMAS_TRAIN_0_MISSING_STATIC = pl.DataFrame(
         "static_numeric_value": [None, [None, 0.06802856922149658]],
         "start_time": [ts[0] for ts in TRAIN_0_TIMES],
         "time": TRAIN_0_TIMES,
+        "measurements_per_event": TRAIN_0_MEASUREMENTS_PER_EVENT,
     },
     schema=SCHEMAS_SCHEMA,
 )
@@ -253,6 +266,8 @@ WANT_SCHEMAS_TRAIN_1 = pl.DataFrame(
         ],
         "start_time": [ts[0] for ts in TRAIN_1_TIMES],
         "time": TRAIN_1_TIMES,
+        # Both subjects: DOB (1), [{3|2},10,11] (3), [4] (1)
+        "measurements_per_event": [[1, 3, 1], [1, 3, 1]],
     },
     schema=SCHEMAS_SCHEMA,
 )
@@ -293,6 +308,8 @@ WANT_SCHEMAS_TUNING_0 = pl.DataFrame(
         "static_numeric_value": [[None, 0.28697699308395386]],
         "start_time": [ts[0] for ts in TUNING_0_TIMES],
         "time": TUNING_0_TIMES,
+        # DOB (1), [3,10,11] (3), [4] (1)
+        "measurements_per_event": [[1, 3, 1]],
     },
     schema=SCHEMAS_SCHEMA,
 )
@@ -331,6 +348,8 @@ WANT_SCHEMAS_HELD_OUT_0 = pl.DataFrame(
         "static_numeric_value": [[None, -0.7995940446853638]],
         "start_time": [ts[0] for ts in HELD_OUT_0_TIMES],
         "time": HELD_OUT_0_TIMES,
+        # DOB (1), [2,10,11] (3), [10,11] (2), [10,11] (2), [4] (1)
+        "measurements_per_event": [[1, 3, 2, 2, 1]],
     },
     schema=SCHEMAS_SCHEMA,
 )
