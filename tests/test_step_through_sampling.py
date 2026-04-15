@@ -57,8 +57,15 @@ def test_step_through_expands_index_and_emits_warning(tensorized_MEDS_dataset, c
     with caplog.at_level(logging.WARNING, logger="meds_torchdata.pytorch_dataset"):
         dataset = MEDSPytorchDataset(cfg, split="train")
 
-    assert any("STEP_THROUGH sampling expands each subject" in rec.message for rec in caplog.records), (
-        "Expected oversampling warning to be logged on dataset __init__"
+    # The warning fires *after* the expansion loop so the numbers it reports are the actual
+    # observed per-subject window counts (in PREPEND mode with per-subject effective windows
+    # a closed-form formula in terms of `config.max_seq_len` would be misleading).
+    warning_messages = [rec.message for rec in caplog.records if rec.levelname == "WARNING"]
+    assert any("STEP_THROUGH sampling expanded" in msg for msg in warning_messages), (
+        f"Expected oversampling warning on dataset __init__, got: {warning_messages}"
+    )
+    assert any("n_subject_windows" in msg for msg in warning_messages), (
+        "Expected the warning to mention the n_subject_windows reweighting escape hatch"
     )
 
     # Expansion must preserve the full set of subjects and produce at least as many elements

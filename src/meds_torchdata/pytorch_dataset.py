@@ -240,20 +240,11 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         """
 
         stride = self.config.step_through_stride
+        n_subjects_before = len(self.index)
 
         expanded_index: list[tuple[int, int]] = []
         expanded_windows: list[tuple[int, int]] = []
         expanded_counts: list[int] = []
-
-        # Oversampling warning: the subject with the longest sequence dominates training when
-        # step-through stride is small. Surface that explicitly before doing the heavy work.
-        logger.warning(
-            "STEP_THROUGH sampling expands each subject into ceil(max(0, seq_len - "
-            "max_seq_len) / stride) + 1 dataset elements, which means subjects with longer "
-            "sequences are oversampled relative to shorter ones. To undo the oversampling at "
-            "loss time, set MEDSTorchDataConfig.include_subject_window_counts_in_batch=True "
-            "and use `1 / batch.n_subject_windows` as a per-sample loss weight."
-        )
 
         for subject_id, end_idx in self.index:
             seq_len = self._step_through_seq_len_for(subject_id, end_idx)
@@ -306,14 +297,27 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         self.index = expanded_index
         self.step_through_windows = expanded_windows
         self.step_through_window_counts = expanded_counts
-        logger.info(
-            "STEP_THROUGH expanded %d subjects into %d dataset elements (stride=%d, "
-            "max_seq_len=%d, max windows per subject=%d).",
-            len({s for s, _ in expanded_index}),
-            len(expanded_index),
+
+        # Oversampling warning — emitted after the expansion loop so the numbers we report
+        # are the actual observed stats rather than a closed-form guess. In PREPEND mode the
+        # effective dynamic window is `max_seq_len - n_static_seq_els` (and in SM+PREPEND that
+        # varies per subject), so the old closed-form formula in terms of `max_seq_len` was
+        # not the formula the expansion actually used.
+        n_elements = len(expanded_index)
+        max_windows = max(expanded_counts) if expanded_counts else 0
+        mean_windows = n_elements / n_subjects_before if n_subjects_before else 0.0
+        logger.warning(
+            "STEP_THROUGH sampling expanded %d subjects into %d dataset elements (stride=%d, "
+            "mean windows per subject=%.1f, max windows per subject=%d). Subjects with "
+            "longer dynamic sequences are oversampled relative to shorter ones by a factor "
+            "equal to their per-subject window count. To undo the oversampling at loss time, "
+            "set MEDSTorchDataConfig.include_subject_window_counts_in_batch=True and use "
+            "`1 / batch.n_subject_windows` as a per-sample loss weight.",
+            n_subjects_before,
+            n_elements,
             stride,
-            self.config.max_seq_len,
-            max(expanded_counts) if expanded_counts else 0,
+            mean_windows,
+            max_windows,
         )
 
     def _effective_max_seq_len_for(self, subject_id: int) -> int:

@@ -443,6 +443,17 @@ class MEDSTorchDataConfig:
                 `None`.
             rng: The random seed to use for subsequence sampling. If `None`, the default rng is used. If an
                 integer, a new rng is created with that seed.
+            explicit_window: An optional pre-computed `(st, end)` slice in the units used by the
+                sampling strategies — that is, events in `BatchMode.SEM` and post-flatten
+                measurements in `BatchMode.SM`. When provided, `process_dynamic_data` honors this
+                slice directly instead of asking the strategy's `subsample_st_offset` for a
+                random start, so it bypasses the RNG entirely. This is used by
+                `STEP_THROUGH` sampling, where `MEDSPytorchDataset` pre-computes one window per
+                dataset element at init time. The provided `end` is still clamped against the
+                effective maximum — `min(seq_len, end, st + max_seq_len)` with `max_seq_len`
+                already reduced by `n_static_seq_els` in `PREPEND` mode — so the concatenated
+                `[static; dynamic]` sample can never exceed `config.max_seq_len` even if the
+                caller passes an oversized window.
 
         Returns:
             The processed dynamic data, still in a `JointNestedRaggedTensorDict` format.
