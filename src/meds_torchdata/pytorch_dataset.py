@@ -182,11 +182,29 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         self.schema_dfs_by_shard: dict[str, pl.DataFrame] = {}
         self.subj_locations: dict[int, tuple[str, int]] = {}
 
+        # Only read the columns this dataset actually needs. Parquet is columnar so this is
+        # a per-column I/O saving at subject-schema load time — most importantly, the
+        # `measurements_per_event` list column is only needed by STEP_THROUGH sampling in
+        # SM mode (where the expansion uses it to map measurement-level window ends back
+        # to event-level indices), so every other config skips it. `start_time` is emitted
+        # by preprocessing but never consumed downstream, so it's always skipped.
+        needed_schema_cols = [
+            DataSchema.subject_id_name,
+            DataSchema.time_name,
+            "static_code",
+            "static_numeric_value",
+        ]
+        if (
+            self.config.seq_sampling_strategy == SubsequenceSamplingStrategy.STEP_THROUGH
+            and self.config.batch_mode == BatchMode.SM
+        ):
+            needed_schema_cols.append("measurements_per_event")
+
         for shard, schema_fp in self.config.schema_fps:
             if not shard.startswith(f"{self.split}/"):
                 continue
 
-            df = pl.read_parquet(schema_fp, use_pyarrow=True).with_columns(
+            df = pl.read_parquet(schema_fp, columns=needed_schema_cols, use_pyarrow=True).with_columns(
                 pl.col("static_code").list.eval(pl.element().fill_null(0)),
                 pl.col("static_numeric_value").list.eval(pl.element().fill_null(np.nan)),
             )
