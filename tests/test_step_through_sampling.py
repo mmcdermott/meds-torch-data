@@ -25,6 +25,7 @@ dataset with algorithmic coverage checks.
 import logging
 from collections import Counter
 
+import polars as pl
 import pytest
 import torch
 
@@ -89,6 +90,64 @@ def test_step_through_overlap_zero_covers_every_event(tensorized_MEDS_dataset):
         max_end = max(ends)
         for pos in range(max_end):
             assert pos in covered, f"Event {pos} for subject {subject_id} not covered"
+
+
+def test_step_through_sm_errors_on_old_cohort_missing_column(tensorized_MEDS_dataset, tmp_path):
+    """Older tensorized cohorts without `measurements_per_event` get a clear migration error.
+
+    Build a mock "old cohort" by copying the current tensorized cohort and stripping the
+    `measurements_per_event` column from every schema parquet, then point an SM-mode
+    step-through config at it. The dataset must raise a `ValueError` mentioning
+    `MTD_preprocess`, not a low-level parquet/column-not-found traceback. This guards the
+    eager-read migration path in `MEDSPytorchDataset.__init__`.
+    """
+    import shutil
+
+    old_cohort = tmp_path / "old_cohort"
+    shutil.copytree(tensorized_MEDS_dataset, old_cohort)
+
+    # Rewrite every schema parquet without the `measurements_per_event` column.
+    stripped_any = False
+    for schema_fp in (old_cohort / "tokenization" / "schemas").rglob("*.parquet"):
+        df = pl.read_parquet(schema_fp)
+        if "measurements_per_event" in df.columns:
+            df.drop("measurements_per_event").write_parquet(schema_fp)
+            stripped_any = True
+    assert stripped_any, "Test setup expected the current cohort to have the new column"
+
+    cfg = MEDSTorchDataConfig(
+        tensorized_cohort_dir=old_cohort,
+        max_seq_len=5,
+        seq_sampling_strategy="step_through",
+        step_through_stride=3,
+        batch_mode="SM",
+    )
+    with pytest.raises(ValueError) as excinfo:
+        MEDSPytorchDataset(cfg, split="train")
+    msg = str(excinfo.value)
+    assert "STEP_THROUGH sampling in SM mode requires" in msg
+    assert "measurements_per_event" in msg
+    assert "MTD_preprocess" in msg
+
+    # SEM mode and non-step-through configs do *not* need the new column, so they keep
+    # working on the stripped cohort — this is the backward-compat property the eager
+    # column check is there to preserve.
+    sem_cfg = MEDSTorchDataConfig(
+        tensorized_cohort_dir=old_cohort,
+        max_seq_len=3,
+        seq_sampling_strategy="step_through",
+        step_through_stride=2,
+        batch_mode="SEM",
+    )
+    MEDSPytorchDataset(sem_cfg, split="train")  # no error
+
+    random_sm_cfg = MEDSTorchDataConfig(
+        tensorized_cohort_dir=old_cohort,
+        max_seq_len=5,
+        seq_sampling_strategy="random",
+        batch_mode="SM",
+    )
+    MEDSPytorchDataset(random_sm_cfg, split="train")  # no error
 
 
 def test_step_through_overlap_too_large_rejected(tensorized_MEDS_dataset):

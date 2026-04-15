@@ -65,6 +65,17 @@ class SubsequenceSamplingStrategy(StrEnum):
             `MEDSTorchDataConfig.include_subject_window_counts_in_batch` for the
             corresponding loss-reweighting escape hatch.
 
+            Performance note for SM mode: each per-window load reads events
+            `[0, enclosing_event_end)` from disk, where `enclosing_event_end` is the smallest
+            event index whose cumulative measurement count covers the target window's
+            measurement end. If the dataset has very fat events (many measurements per
+            timestamp) and `max_seq_len` is small relative to the per-event measurement
+            count, consecutive windows can share the same enclosing event and re-read the
+            same prefix — so SM-mode step-through I/O does **not** scale purely with
+            `max_seq_len` in that regime. For cohorts with thin events (≤ a few measurements
+            per timestamp) this is a non-issue. Switching to `BatchMode.SEM` avoids the
+            re-read entirely because the window is already event-aligned.
+
     Methods:
         subsample_st_offset: Subsample starting offset based on maximum sequence length and sampling strategy.
             This method can be used on instances

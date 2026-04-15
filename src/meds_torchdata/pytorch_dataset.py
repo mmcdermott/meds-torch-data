@@ -194,15 +194,32 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             "static_code",
             "static_numeric_value",
         ]
-        if (
+        needs_meas_per_event = (
             self.config.seq_sampling_strategy == SubsequenceSamplingStrategy.STEP_THROUGH
             and self.config.batch_mode == BatchMode.SM
-        ):
+        )
+        if needs_meas_per_event:
             needed_schema_cols.append("measurements_per_event")
 
         for shard, schema_fp in self.config.schema_fps:
             if not shard.startswith(f"{self.split}/"):
                 continue
+
+            # Inspect the parquet schema first so that older tensorized cohorts missing the
+            # `measurements_per_event` column (added when STEP_THROUGH SM mode landed) fail
+            # with a clear "re-run preprocessing" error instead of a low-level polars /
+            # pyarrow column-not-found traceback. Only the column *we asked for* matters,
+            # so we only check when the user's config actually needs it.
+            if needs_meas_per_event:
+                available = set(pq.read_schema(schema_fp).names)
+                if "measurements_per_event" not in available:
+                    raise ValueError(
+                        f"STEP_THROUGH sampling in SM mode requires the "
+                        f"`measurements_per_event` column on the schema parquet at "
+                        f"{schema_fp}, which older tensorized cohorts (preprocessed before "
+                        "this feature landed) do not have. Re-run preprocessing "
+                        "(`MTD_preprocess`) to produce it."
+                    )
 
             df = pl.read_parquet(schema_fp, columns=needed_schema_cols, use_pyarrow=True).with_columns(
                 pl.col("static_code").list.eval(pl.element().fill_null(0)),
@@ -575,14 +592,12 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             ([11], [6])
         """
 
+        # `__init__` has already verified that `measurements_per_event` exists on every
+        # schema parquet this dataset reads (the check lives there so we can raise a clean
+        # "re-run preprocessing" error before the eager `pl.read_parquet(columns=...)`
+        # would otherwise blow up with a low-level parquet/column-not-found traceback).
         shard, subject_idx = self.subj_locations[subject_id]
         schema_row = self.schema_dfs_by_shard[shard][subject_idx]
-        if "measurements_per_event" not in schema_row.columns:
-            raise ValueError(
-                "STEP_THROUGH sampling in SM mode requires the `measurements_per_event` "
-                "column on the schema parquet, which older tensorized cohorts do not have. "
-                "Re-run preprocessing (`MTD_preprocess`) to produce it."
-            )
         meas_per_event_series = schema_row["measurements_per_event"].item()
         if meas_per_event_series is None:
             # Subject with no dynamic data — single trivial window.
