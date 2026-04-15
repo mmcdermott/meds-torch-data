@@ -207,14 +207,15 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         )
         self.labels = self.schema_df[self.LABEL_COL] if self.has_task_labels else None
 
-        # Parallel arrays populated only when STEP_THROUGH sampling is active. For every index
-        # entry, `self.step_through_windows[i]` is a `(st, end)` tuple in "dynamic data length"
-        # units (matching `MEDSTorchDataConfig.process_dynamic_data`: events in SEM mode,
-        # post-flatten measurements in SM mode) and `self.step_through_window_counts[i]` is the
-        # total number of dataset elements the originating subject expands into (used to
-        # populate `MEDSTorchBatch.n_subject_windows` for loss reweighting).
+        # Populated only when STEP_THROUGH sampling is active. For every index entry,
+        # `self.step_through_windows[i]` is a `(st, end)` slice applied to the dynamic data
+        # after the optional SM-mode flatten (so `st`, `end` are in events in SEM mode and in
+        # post-flatten measurements in SM mode). The number of dataset elements each subject
+        # expands into is cached as a simple `subject_id -> count` dict, which populates
+        # `MEDSTorchBatch.n_subject_windows` when
+        # `config.include_subject_window_counts_in_batch` is set.
         self.step_through_windows: list[tuple[int, int]] | None = None
-        self.step_through_window_counts: list[int] | None = None
+        self._windows_per_subject: dict[int, int] | None = None
         if self.config.seq_sampling_strategy == SubsequenceSamplingStrategy.STEP_THROUGH:
             self._expand_index_for_step_through()
 
@@ -237,6 +238,55 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         [static; dynamic] sample still fits inside `config.max_seq_len`. This is the same
         reduction applied by `MEDSTorchDataConfig.process_dynamic_data` for the other
         sampling strategies.
+
+        Examples:
+            >>> import dataclasses
+            >>> cfg = dataclasses.replace(
+            ...     sample_dataset_config,
+            ...     max_seq_len=3,
+            ...     seq_sampling_strategy="step_through",
+            ...     step_through_stride=2,
+            ...     batch_mode="SEM",
+            ...     static_inclusion_mode="omit",
+            ...     include_subject_window_counts_in_batch=True,
+            ... )
+
+            `MEDSPytorchDataset.__init__` runs the expansion automatically. The four subjects
+            in the fixture have event counts of 6, 8, 3, and 3, so with window=3 and stride=2
+            the long subjects expand into multiple entries while the short ones contribute a
+            single window each:
+
+            >>> pyd = MEDSPytorchDataset(cfg, split="train")
+            >>> pyd.index
+            [(239684, 6), (239684, 6), (239684, 6), (1195293, 8), (1195293, 8), (1195293, 8),
+             (1195293, 8), (68729, 3), (814703, 3)]
+            >>> pyd.step_through_windows
+            [(0, 3), (2, 5), (3, 6), (0, 3), (2, 5), (4, 7), (5, 8), (0, 3), (0, 3)]
+            >>> pyd._windows_per_subject
+            {239684: 3, 1195293: 4, 68729: 1, 814703: 1}
+
+            Per-sample output carries the window count when the config flag is set, and the
+            `dynamic` payload at `pyd[idx]` is already the sliced window — no further random
+            subsampling is performed:
+
+            >>> sample = pyd[0]
+            >>> sample["n_subject_windows"]
+            3
+            >>> sample["dynamic"].to_dense()["code"]
+            array([[ 5,  0,  0],
+                   [ 1, 10, 11],
+                   [10, 11,  0]], dtype=uint8)
+
+            Collated batches surface `n_subject_windows` as a parallel tensor of shape
+            `[batch_size]`, intended for per-sample loss reweighting
+            (`1 / n_subject_windows` — subjects expanded into more windows are proportionally
+            downweighted to undo the sampling bias):
+
+            >>> batch = pyd.collate([pyd[0], pyd[1], pyd[7]])
+            >>> batch.n_subject_windows
+            tensor([3, 3, 1])
+            >>> (1.0 / batch.n_subject_windows.float()).tolist()
+            [0.3333333432674408, 0.3333333432674408, 1.0]
         """
 
         stride = self.config.step_through_stride
@@ -244,7 +294,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
         expanded_index: list[tuple[int, int]] = []
         expanded_windows: list[tuple[int, int]] = []
-        expanded_counts: list[int] = []
+        windows_per_subject: dict[int, int] = {}
 
         for subject_id, end_idx in self.index:
             seq_len = self._step_through_seq_len_for(subject_id, end_idx)
@@ -261,7 +311,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             if seq_len <= window:
                 expanded_index.append((subject_id, end_idx))
                 expanded_windows.append((0, seq_len))
-                expanded_counts.append(1)
+                windows_per_subject[subject_id] = 1
                 continue
 
             # First window starts at 0 and we step forward by `stride`; we stop once the next
@@ -278,15 +328,15 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             if len(starts) >= 2 and starts[-1] == starts[-2]:
                 starts.pop()
 
-            n_windows = len(starts)
+            windows_per_subject[subject_id] = len(starts)
             for window_st in starts:
                 expanded_index.append((subject_id, end_idx))
                 expanded_windows.append((window_st, window_st + window))
-                expanded_counts.append(n_windows)
 
-        # Rebuild labels in the same (expanded) order. Step-through is not allowed in task mode
-        # (the config enforces TO_END when a task is set), so there should be no labels to
-        # duplicate, but we still assert this here to make the invariant explicit.
+        # Step-through is not allowed in task mode (the config enforces TO_END when a task is
+        # set) because labels correspond to specific end-of-window predictions that can't be
+        # remapped onto arbitrarily-placed mid-sequence windows. The check here makes the
+        # invariant explicit.
         if self.has_task_labels:  # pragma: no cover -- prevented by MEDSTorchDataConfig validation
             raise ValueError(
                 "STEP_THROUGH sampling is not compatible with task-mode datasets; labels "
@@ -296,7 +346,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
         self.index = expanded_index
         self.step_through_windows = expanded_windows
-        self.step_through_window_counts = expanded_counts
+        self._windows_per_subject = windows_per_subject
 
         # Oversampling warning — emitted after the expansion loop so the numbers we report
         # are the actual observed stats rather than a closed-form guess. In PREPEND mode the
@@ -304,7 +354,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         # varies per subject), so the old closed-form formula in terms of `max_seq_len` was
         # not the formula the expansion actually used.
         n_elements = len(expanded_index)
-        max_windows = max(expanded_counts) if expanded_counts else 0
+        max_windows = max(windows_per_subject.values()) if windows_per_subject else 0
         mean_windows = n_elements / n_subjects_before if n_subjects_before else 0.0
         logger.warning(
             "STEP_THROUGH sampling expanded %d subjects into %d dataset elements (stride=%d, "
@@ -583,27 +633,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         """
 
         subject_id, end_idx = self.index[idx]
-
-        # In SEM + step-through, the stored `(window_st, window_end)` is already in event
-        # units, so we can load only that event slice instead of reading the full `[0,
-        # end_idx)` prefix for every window of the same subject. This turns an `O(N *
-        # end_idx)` total read (for N windows per subject) into `O(N * window_size)`.
-        # In SM mode the window is in post-flatten measurement units, which can't be mapped
-        # back to an event range without loading the full prefix first, so step-through SM
-        # keeps the prefix-load path.
-        explicit_window: tuple[int, int] | None = None
-        if self.step_through_windows is not None and self.config.batch_mode == BatchMode.SEM:
-            window_st, window_end = self.step_through_windows[idx]
-            dynamic_data, static_data = self.load_subject_data(
-                subject_id=subject_id, st=window_st, end=window_end
-            )
-            # The loaded slice already *is* the window; tell `process_dynamic_data` to
-            # consume all of it (rebased to 0).
-            explicit_window = (0, window_end - window_st)
-        else:
-            dynamic_data, static_data = self.load_subject_data(subject_id=subject_id, st=0, end=end_idx)
-            if self.step_through_windows is not None:
-                explicit_window = self.step_through_windows[idx]
+        dynamic_data, static_data = self.load_subject_data(subject_id=subject_id, st=0, end=end_idx)
 
         match self.config.static_inclusion_mode:
             case StaticInclusionMode.OMIT:
@@ -619,20 +649,29 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                 n_static_seq_els = len(static_data.code) if self.config.batch_mode == BatchMode.SM else 1
                 out = {"n_static_seq_els": n_static_seq_els}
 
-        dynamic_data = self.config.process_dynamic_data(
-            dynamic_data,
-            n_static_seq_els=n_static_seq_els,
-            rng=seed,
-            explicit_window=explicit_window,
-        )
+        if self.step_through_windows is None:
+            dynamic_data = self.config.process_dynamic_data(
+                dynamic_data, n_static_seq_els=n_static_seq_els, rng=seed
+            )
+        else:
+            # STEP_THROUGH pre-computes the slice bounds at `__init__` time (in events for
+            # SEM and post-flatten measurements for SM), so here we just do the mode-matching
+            # flatten and take the stored slice directly. Skipping `process_dynamic_data`
+            # avoids re-running its sampler for a window whose position is already decided.
+            # The slice width already reflects any `PREPEND` static-element reduction because
+            # the expansion logic uses `_effective_max_seq_len_for(subject_id)`.
+            if self.config.batch_mode == BatchMode.SM:
+                dynamic_data = dynamic_data.flatten()
+            slice_st, slice_end = self.step_through_windows[idx]
+            dynamic_data = dynamic_data[slice_st:slice_end]
 
         # Only leak the per-subject window count into the sample dict when the user has
         # explicitly asked for it in the batch — otherwise the sample API would depend on
         # the sampling strategy, which a user reading individual `dataset[idx]` outputs
         # would find surprising. The collator's fallback-to-1 handles non-step-through
         # datasets that still opt into the batch field.
-        if self.config.include_subject_window_counts_in_batch and self.step_through_window_counts is not None:
-            out["n_subject_windows"] = self.step_through_window_counts[idx]
+        if self.config.include_subject_window_counts_in_batch and self._windows_per_subject is not None:
+            out["n_subject_windows"] = self._windows_per_subject[subject_id]
 
         if self.config.static_inclusion_mode == StaticInclusionMode.PREPEND:
             static_as_JNRT = static_data.to_JNRT(self.config.batch_mode, dynamic_data.schema)

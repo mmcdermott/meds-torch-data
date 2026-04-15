@@ -105,6 +105,48 @@ class MEDSTorchDataConfig:
         Traceback (most recent call last):
             ...
         ValueError: Invalid static inclusion mode: foobar
+
+        STEP_THROUGH sampling requires a positive integer ``step_through_stride``. A missing,
+        zero, negative, or non-int stride raises. ``bool`` is explicitly rejected because it is
+        a subclass of ``int`` in Python (so ``isinstance(True, int)`` would otherwise silently
+        accept it as stride 1):
+
+        >>> MEDSTorchDataConfig(
+        ...     tensorized_cohort_dir=".", max_seq_len=3, seq_sampling_strategy="step_through"
+        ... )
+        Traceback (most recent call last):
+            ...
+        ValueError: step_through_stride must be a positive integer when seq_sampling_strategy is
+        STEP_THROUGH; got None.
+        >>> MEDSTorchDataConfig(
+        ...     tensorized_cohort_dir=".", max_seq_len=3, seq_sampling_strategy="step_through",
+        ...     step_through_stride=0,
+        ... )
+        Traceback (most recent call last):
+            ...
+        ValueError: step_through_stride must be a positive integer when seq_sampling_strategy is
+        STEP_THROUGH; got 0.
+        >>> MEDSTorchDataConfig(
+        ...     tensorized_cohort_dir=".", max_seq_len=3, seq_sampling_strategy="step_through",
+        ...     step_through_stride=True,
+        ... )
+        Traceback (most recent call last):
+            ...
+        ValueError: step_through_stride must be a positive integer when seq_sampling_strategy is
+        STEP_THROUGH; got True.
+
+        Conversely, setting ``step_through_stride`` with any other strategy is also rejected,
+        because the field has no effect outside STEP_THROUGH and silently accepting it would
+        mask configuration mistakes:
+
+        >>> MEDSTorchDataConfig(
+        ...     tensorized_cohort_dir=".", max_seq_len=3, seq_sampling_strategy="random",
+        ...     step_through_stride=2,
+        ... )
+        Traceback (most recent call last):
+            ...
+        ValueError: step_through_stride may only be set when seq_sampling_strategy is STEP_THROUGH;
+        got strategy random with stride 2.
     """
 
     # MEDS Dataset Information
@@ -439,7 +481,6 @@ class MEDSTorchDataConfig:
         data: JointNestedRaggedTensorDict,
         n_static_seq_els: int | None = None,
         rng: np.random.Generator | int | None = None,
-        explicit_window: tuple[int, int] | None = None,
     ) -> JointNestedRaggedTensorDict:
         """This processes the dynamic data for a subject, including subsampling and flattening.
 
@@ -450,17 +491,6 @@ class MEDSTorchDataConfig:
                 `None`.
             rng: The random seed to use for subsequence sampling. If `None`, the default rng is used. If an
                 integer, a new rng is created with that seed.
-            explicit_window: An optional pre-computed `(st, end)` slice in the units used by the
-                sampling strategies — that is, events in `BatchMode.SEM` and post-flatten
-                measurements in `BatchMode.SM`. When provided, `process_dynamic_data` honors this
-                slice directly instead of asking the strategy's `subsample_st_offset` for a
-                random start, so it bypasses the RNG entirely. This is used by
-                `STEP_THROUGH` sampling, where `MEDSPytorchDataset` pre-computes one window per
-                dataset element at init time. The provided `end` is still clamped against the
-                effective maximum — `min(seq_len, end, st + max_seq_len)` with `max_seq_len`
-                already reduced by `n_static_seq_els` in `PREPEND` mode — so the concatenated
-                `[static; dynamic]` sample can never exceed `config.max_seq_len` even if the
-                caller passes an oversized window.
 
         Returns:
             The processed dynamic data, still in a `JointNestedRaggedTensorDict` format.
@@ -668,26 +698,15 @@ class MEDSTorchDataConfig:
 
             max_seq_len -= n_static_seq_els
 
-        if explicit_window is not None:
-            # STEP_THROUGH hands us a pre-computed `(st, end)` window from the dataset-level
-            # expansion — honor it directly rather than asking the (non-deterministic) sampler,
-            # but still enforce the effective max sequence length (post `-= n_static_seq_els`
-            # reduction above) so PREPEND concatenation can never produce a sample longer than
-            # `config.max_seq_len`.
-            st, end = explicit_window
-            st = max(0, st)
-            end = min(seq_len, end, st + max_seq_len)
-            return data[st:end]
-
         st = self.seq_sampling_strategy.subsample_st_offset(seq_len, max_seq_len, rng=rng)
-
         if st is None:
             st = 0
+        end = st + max_seq_len
 
-        end = min(seq_len, st + max_seq_len)
-        # `BALANCED_RANDOM` may return a negative start offset to let windows overhang the left
-        # boundary (yielding a uniform per-event inclusion distribution). Clamp the actual slice
-        # start to zero so we just return the (shorter) in-sequence portion; padding is handled
-        # by the collator downstream.
+        # Clamp the resulting slice: `BALANCED_RANDOM` can return a negative `st` so the
+        # window overhangs the left boundary (yielding a uniform per-event inclusion
+        # distribution — padding is handled by the collator downstream); `end` likewise may
+        # overhang the right boundary or exceed `seq_len` for short sequences.
         st = max(0, st)
+        end = min(seq_len, end)
         return data[st:end]

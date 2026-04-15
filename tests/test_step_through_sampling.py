@@ -86,13 +86,13 @@ def test_step_through_expands_index_and_emits_warning(tensorized_MEDS_dataset, c
     n_subjects = len({s for s, _ in dataset.index})
     assert len(dataset) >= n_subjects
     assert dataset.step_through_windows is not None
-    assert dataset.step_through_window_counts is not None
     assert len(dataset.step_through_windows) == len(dataset)
-    assert len(dataset.step_through_window_counts) == len(dataset)
+    assert dataset._windows_per_subject is not None
+    assert set(dataset._windows_per_subject) == {s for s, _ in dataset.index}
 
     # At least one subject must have been expanded into more than one window for the test
     # to be meaningful.
-    assert max(dataset.step_through_window_counts) > 1
+    assert max(dataset._windows_per_subject.values()) > 1
 
     # Consecutive entries belonging to the same subject must have strictly non-decreasing
     # window starts (deterministic ordered walk).
