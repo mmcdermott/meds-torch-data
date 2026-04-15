@@ -626,7 +626,12 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             explicit_window=explicit_window,
         )
 
-        if self.step_through_window_counts is not None:
+        # Only leak the per-subject window count into the sample dict when the user has
+        # explicitly asked for it in the batch — otherwise the sample API would depend on
+        # the sampling strategy, which a user reading individual `dataset[idx]` outputs
+        # would find surprising. The collator's fallback-to-1 handles non-step-through
+        # datasets that still opt into the batch field.
+        if self.config.include_subject_window_counts_in_batch and self.step_through_window_counts is not None:
             out["n_subject_windows"] = self.step_through_window_counts[idx]
 
         if self.config.static_inclusion_mode == StaticInclusionMode.PREPEND:
