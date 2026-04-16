@@ -1,4 +1,10 @@
-"""Test set-up and fixtures code."""
+"""Test set-up and fixtures code.
+
+`MEDS_transforms.pytest_plugin` is auto-registered as a pytest entry-point plugin
+(via `meds-transforms`' own `pytest11` entry point), so `@Stage.register(..., examples_dir=...,
+example_class=...)` registrations in this package are automatically discovered and parametrized
+via the `stage_example` fixture — see `tests/preprocessing/test_stages.py`.
+"""
 
 import importlib
 import tempfile

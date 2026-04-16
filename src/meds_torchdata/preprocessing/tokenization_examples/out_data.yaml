@@ -1,0 +1,31 @@
+# Expected tokenization output for the two-subject input.
+# Paths are relative to the cohort root; the stage's default output_dir is `${output_dir}/data`
+# so schemas and event_seqs land under `data/schemas/` and `data/event_seqs/`.
+data/schemas/train/0.parquet:
+  subject_id: [1, 2]
+  static_code:
+    - [5]
+    - [6, 7]
+  static_numeric_value:
+    - [1.0]
+    - [2.0, 3.0]
+  start_time:
+    - 2020-01-01 00:00:00
+    - 2021-06-01 00:00:00
+  time:
+    - [2020-01-01 00:00:00, 2020-01-11 00:00:00]
+    - [2021-06-01 00:00:00, 2021-06-03 00:00:00]
+  measurements_per_event:
+    - [2, 1]
+    - [2, 1]
+data/event_seqs/train/0.parquet:
+  subject_id: [1, 2]
+  time_delta_days:
+    - [.nan, 10.0]
+    - [.nan, 2.0]
+  code:
+    - [[10, 11], [12]]
+    - [[20, 21], [22]]
+  numeric_value:
+    - [[0.5, 0.7], [1.2]]
+    - [[5.5, 5.7], [6.2]]

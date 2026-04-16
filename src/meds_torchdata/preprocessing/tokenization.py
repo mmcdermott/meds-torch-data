@@ -18,6 +18,8 @@ from MEDS_transforms.mapreduce.shard_iteration import shard_iterator
 from MEDS_transforms.stages import Stage
 from omegaconf import DictConfig, OmegaConf
 
+from ._stage_example import MTDStageExample
+
 SECONDS_PER_MINUTE = 60.0
 SECONDS_PER_HOUR = SECONDS_PER_MINUTE * 60.0
 SECONDS_PER_DAY = SECONDS_PER_HOUR * 24.0
@@ -304,7 +306,11 @@ def extract_seq_of_subject_events(df: pl.LazyFrame) -> pl.LazyFrame:
     )
 
 
-@Stage.register(is_metadata=False)
+@Stage.register(
+    is_metadata=False,
+    example_class=MTDStageExample,
+    examples_dir=Path(__file__).parent / "tokenization_examples",
+)
 def main(cfg: DictConfig):
     """Tokenizes the dataset in accordance with the aggregated code metadata.
 

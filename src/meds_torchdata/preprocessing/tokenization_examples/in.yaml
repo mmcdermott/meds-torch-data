@@ -1,0 +1,19 @@
+# Minimal tokenization input: one shard with two subjects' normalized MEDS data.
+# Subject 1: 1 static row (code=5), two events at (2020-01-01: codes 10,11) and (2020-01-11: code 12).
+# Subject 2: 2 static rows (codes 6, 7), two events at (2021-06-01: codes 20,21) and (2021-06-03: code 22).
+# Integer codes are fine — tokenization only cares that the input parquet has
+# (subject_id, time, code, numeric_value) columns.
+data/train/0.parquet:
+  subject_id: [1, 1, 1, 1, 2, 2, 2, 2, 2]
+  time:
+    - null
+    - 2020-01-01 00:00:00
+    - 2020-01-01 00:00:00
+    - 2020-01-11 00:00:00
+    - null
+    - null
+    - 2021-06-01 00:00:00
+    - 2021-06-01 00:00:00
+    - 2021-06-03 00:00:00
+  code: [5, 10, 11, 12, 6, 7, 20, 21, 22]
+  numeric_value: [1.0, 0.5, 0.7, 1.2, 2.0, 3.0, 5.5, 5.7, 6.2]
