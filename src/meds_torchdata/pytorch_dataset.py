@@ -1560,6 +1560,24 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             │ │ │ │   [False,  True,  True],
             │ │ │ │   [False,  True,  True],
             │ │ │ │   [False,  True,  True]]]
+
+            Regression test for the `PREPEND + SM + include_time_delta=False` interaction: the
+            static-mask sizing for SM+PREPEND used to read its sequence-length axis from
+            `time_delta_days`, which silently disappears when `include_time_delta=False`. The
+            current implementation reads the axis from `code` (always present), so the
+            composition still produces a correctly-shaped static mask:
+
+            >>> sample_pytorch_dataset.config.batch_mode = "SM"
+            >>> sample_pytorch_dataset.config.include_numeric_value = False
+            >>> sample_pytorch_dataset.config.include_time_delta = False
+            >>> raw_batch = [sample_pytorch_dataset[2], sample_pytorch_dataset[3]]
+            >>> batch = sample_pytorch_dataset.collate(raw_batch)
+            >>> batch.numeric_value is None and batch.time_delta_days is None
+            True
+            >>> batch.static_mask.shape == batch.code.shape
+            True
+            >>> sample_pytorch_dataset.config.include_numeric_value = True
+            >>> sample_pytorch_dataset.config.include_time_delta = True
         """
 
         data = JointNestedRaggedTensorDict.vstack([item["dynamic"] for item in batch])
