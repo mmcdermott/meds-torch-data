@@ -110,7 +110,11 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
 
     Returns:
         A `pl.LazyFrame` object containing the static data and the unique times of the subject, grouped
-        by subject as lists, in the same order as the subject IDs occurred in the original file.
+        by subject as lists, in the same order as the subject IDs occurred in the original file. Each
+        subject also carries a `measurements_per_event` list, parallel to the `time` list, giving the
+        number of raw measurements (rows in the source dataframe) at each unique timestamp. This column
+        is needed by `STEP_THROUGH` sampling in `BatchMode.SM` to map measurement-level window ends back
+        to event-level indices.
 
     Examples:
         >>> from datetime import datetime
@@ -123,7 +127,7 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
         ...     "numeric_value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
         ... }).lazy()
         >>> df = extract_statics_and_schema(df).collect()
-        >>> df.drop("time")
+        >>> df.drop("time", "measurements_per_event")
         shape: (2, 4)
         ┌────────────┬─────────────┬──────────────────────┬─────────────────────┐
         │ subject_id ┆ static_code ┆ static_numeric_value ┆ start_time          │
@@ -133,17 +137,19 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
         │ 1          ┆ [100]       ┆ [1.0]                ┆ 2021-01-01 00:00:00 │
         │ 2          ┆ [200]       ┆ [5.0]                ┆ 2021-01-02 00:00:00 │
         └────────────┴─────────────┴──────────────────────┴─────────────────────┘
-        >>> df.select("subject_id", "time").explode("time")
-        shape: (3, 2)
-        ┌────────────┬─────────────────────┐
-        │ subject_id ┆ time                │
-        │ ---        ┆ ---                 │
-        │ i64        ┆ datetime[μs]        │
-        ╞════════════╪═════════════════════╡
-        │ 1          ┆ 2021-01-01 00:00:00 │
-        │ 1          ┆ 2021-01-13 00:00:00 │
-        │ 2          ┆ 2021-01-02 00:00:00 │
-        └────────────┴─────────────────────┘
+        >>> df.select("subject_id", "time", "measurements_per_event").explode(
+        ...     "time", "measurements_per_event"
+        ... )
+        shape: (3, 3)
+        ┌────────────┬─────────────────────┬────────────────────────┐
+        │ subject_id ┆ time                ┆ measurements_per_event │
+        │ ---        ┆ ---                 ┆ ---                    │
+        │ i64        ┆ datetime[μs]        ┆ u32                    │
+        ╞════════════╪═════════════════════╪════════════════════════╡
+        │ 1          ┆ 2021-01-01 00:00:00 ┆ 2                      │
+        │ 1          ┆ 2021-01-13 00:00:00 ┆ 1                      │
+        │ 2          ┆ 2021-01-02 00:00:00 ┆ 2                      │
+        └────────────┴─────────────────────┴────────────────────────┘
         >>> df = pl.DataFrame({
         ...     "subject_id": [1, 1, 1, 1, 2, 2, 2],
         ...     "time": [
@@ -153,7 +159,7 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
         ...     "numeric_value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
         ... }).lazy()
         >>> df = extract_statics_and_schema(df).collect()
-        >>> df.drop("time")
+        >>> df.drop("time", "measurements_per_event")
         shape: (2, 4)
         ┌────────────┬─────────────┬──────────────────────┬─────────────────────┐
         │ subject_id ┆ static_code ┆ static_numeric_value ┆ start_time          │
@@ -163,19 +169,21 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
         │ 1          ┆ null        ┆ null                 ┆ 2020-01-01 00:00:00 │
         │ 2          ┆ null        ┆ null                 ┆ 2020-01-01 00:00:00 │
         └────────────┴─────────────┴──────────────────────┴─────────────────────┘
-        >>> df.select("subject_id", "time").explode("time")
-        shape: (5, 2)
-        ┌────────────┬─────────────────────┐
-        │ subject_id ┆ time                │
-        │ ---        ┆ ---                 │
-        │ i64        ┆ datetime[μs]        │
-        ╞════════════╪═════════════════════╡
-        │ 1          ┆ 2020-01-01 00:00:00 │
-        │ 1          ┆ 2021-01-01 00:00:00 │
-        │ 1          ┆ 2021-01-13 00:00:00 │
-        │ 2          ┆ 2020-01-01 00:00:00 │
-        │ 2          ┆ 2021-01-02 00:00:00 │
-        └────────────┴─────────────────────┘
+        >>> df.select("subject_id", "time", "measurements_per_event").explode(
+        ...     "time", "measurements_per_event"
+        ... )
+        shape: (5, 3)
+        ┌────────────┬─────────────────────┬────────────────────────┐
+        │ subject_id ┆ time                ┆ measurements_per_event │
+        │ ---        ┆ ---                 ┆ ---                    │
+        │ i64        ┆ datetime[μs]        ┆ u32                    │
+        ╞════════════╪═════════════════════╪════════════════════════╡
+        │ 1          ┆ 2020-01-01 00:00:00 ┆ 1                      │
+        │ 1          ┆ 2021-01-01 00:00:00 ┆ 2                      │
+        │ 1          ┆ 2021-01-13 00:00:00 ┆ 1                      │
+        │ 2          ┆ 2020-01-01 00:00:00 ┆ 1                      │
+        │ 2          ┆ 2021-01-02 00:00:00 ┆ 2                      │
+        └────────────┴─────────────────────┴────────────────────────┘
     """
 
     static, dynamic = split_static_and_dynamic(df)
@@ -186,10 +194,19 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
         pl.col("numeric_value").alias("static_numeric_value"),
     )
 
-    # This collects the unique times for each subject.
-    schema_by_subject = dynamic.group_by("subject_id", maintain_order=True).agg(
-        pl.col("time").min().alias("start_time"),
-        pl.col("time").unique(maintain_order=True),
+    # Collect unique times per subject, along with the number of measurements at each timestamp (needed
+    # by STEP_THROUGH sampling in SM mode to map measurement-level window ends back to event indices
+    # without re-loading the dynamic tensor). The two-step group_by preserves source order, so the
+    # `time` and `measurements_per_event` lists line up element-for-element.
+    schema_by_subject = (
+        dynamic.group_by(["subject_id", "time"], maintain_order=True)
+        .agg(pl.len().alias("measurements_per_event"))
+        .group_by("subject_id", maintain_order=True)
+        .agg(
+            pl.col("time").min().alias("start_time"),
+            pl.col("time"),
+            pl.col("measurements_per_event"),
+        )
     )
 
     return static_by_subject.join(schema_by_subject, on="subject_id", how="full", coalesce=True)
