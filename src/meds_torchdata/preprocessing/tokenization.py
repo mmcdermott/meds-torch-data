@@ -110,7 +110,7 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
 
     Returns:
         A `pl.LazyFrame` object containing the static data and the unique times of the subject, grouped
-        by subject as lists, sorted by `subject_id` for deterministic output ordering. Each
+        by subject as lists, in the same order as the subject IDs occurred in the original file. Each
         subject also carries a `measurements_per_event` list, parallel to the `time` list, giving the
         number of raw measurements (rows in the source dataframe) at each unique timestamp. This column
         is needed by `STEP_THROUGH` sampling in `BatchMode.SM` to map measurement-level window ends back
@@ -184,6 +184,27 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
         │ 2          ┆ 2020-01-01 00:00:00 ┆ 1                      │
         │ 2          ┆ 2021-01-02 00:00:00 ┆ 2                      │
         └────────────┴─────────────────────┴────────────────────────┘
+
+        Source order is preserved across the full-outer join, not re-sorted by `subject_id`. Here
+        subject `7` appears before `3` in the input and must appear in the same order on output.
+        (Regression test: polars 1.39+ stopped preserving pre-join ordering for `how="full"`.)
+
+        >>> df = pl.DataFrame({
+        ...     "subject_id": [7, 7, 3, 3],
+        ...     "time": [None, datetime(2021, 1, 1), None, datetime(2021, 1, 2)],
+        ...     "code": [700, 701, 300, 301],
+        ...     "numeric_value": [1.0, 2.0, 3.0, 4.0],
+        ... }).lazy()
+        >>> extract_statics_and_schema(df).collect().select("subject_id")
+        shape: (2, 1)
+        ┌────────────┐
+        │ subject_id │
+        │ ---        │
+        │ i64        │
+        ╞════════════╡
+        │ 7          │
+        │ 3          │
+        └────────────┘
     """
 
     static, dynamic = split_static_and_dynamic(df)
@@ -209,11 +230,16 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
         )
     )
 
-    # Sort after the full join so row order is deterministic; polars 1.39 no longer
-    # preserves the pre-join ordering for `how="full"`, so without an explicit sort
-    # the schema parquet shard-to-shard layout becomes polars-version-dependent.
-    return static_by_subject.join(schema_by_subject, on="subject_id", how="full", coalesce=True).sort(
-        "subject_id"
+    # polars 1.39+ no longer preserves pre-join row ordering for `how="full"`, so the source-order
+    # guarantee in the docstring can't rely on the `maintain_order=True` group_bys alone. Attach an
+    # explicit first-occurrence-in-source index and sort by it after the join.
+    subject_order = df.select("subject_id").unique(maintain_order=True).with_row_index("_subject_order")
+
+    return (
+        static_by_subject.join(schema_by_subject, on="subject_id", how="full", coalesce=True)
+        .join(subject_order, on="subject_id", how="left")
+        .sort("_subject_order")
+        .drop("_subject_order")
     )
 
 
