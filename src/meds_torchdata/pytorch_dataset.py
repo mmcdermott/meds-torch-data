@@ -183,17 +183,18 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         self.subj_locations: dict[int, tuple[str, int]] = {}
 
         # Only read the columns this dataset actually needs. Parquet is columnar so this is
-        # a per-column I/O saving at subject-schema load time — most importantly, the
-        # `measurements_per_event` list column is only needed by STEP_THROUGH sampling in
-        # SM mode (where the expansion uses it to map measurement-level window ends back
-        # to event-level indices), so every other config skips it. `start_time` is emitted
-        # by preprocessing but never consumed downstream, so it's always skipped.
-        needed_schema_cols = [
-            DataSchema.subject_id_name,
-            DataSchema.time_name,
-            "static_code",
-            "static_numeric_value",
-        ]
+        # a per-column I/O saving at subject-schema load time:
+        # - `static_code` / `static_numeric_value` are only needed when
+        #   `static_inclusion_mode != OMIT` (see issue #45). OMIT-mode datasets skip them
+        #   entirely at both the parquet read and `load_subject_data` call sites.
+        # - `measurements_per_event` is only needed by STEP_THROUGH sampling in SM mode
+        #   (the expansion uses it to map measurement-level window ends back to event-level
+        #   indices), so every other config skips it.
+        # - `start_time` is emitted by preprocessing but never consumed downstream, so it's
+        #   always skipped.
+        needed_schema_cols = [DataSchema.subject_id_name, DataSchema.time_name]
+        if self.config.includes_static:
+            needed_schema_cols.extend(["static_code", "static_numeric_value"])
         needs_meas_per_event = (
             self.config.seq_sampling_strategy == SubsequenceSamplingStrategy.STEP_THROUGH
             and self.config.batch_mode == BatchMode.SM
@@ -221,10 +222,12 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                         "(`MTD_preprocess`) to produce it."
                     )
 
-            df = pl.read_parquet(schema_fp, columns=needed_schema_cols, use_pyarrow=True).with_columns(
-                pl.col("static_code").list.eval(pl.element().fill_null(0)),
-                pl.col("static_numeric_value").list.eval(pl.element().fill_null(np.nan)),
-            )
+            df = pl.read_parquet(schema_fp, columns=needed_schema_cols, use_pyarrow=True)
+            if self.config.includes_static:
+                df = df.with_columns(
+                    pl.col("static_code").list.eval(pl.element().fill_null(0)),
+                    pl.col("static_numeric_value").list.eval(pl.element().fill_null(np.nan)),
+                )
 
             self.schema_dfs_by_shard[shard] = df
             for i, subj in enumerate(df[DataSchema.subject_id_name]):
@@ -957,7 +960,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
     def load_subject_data(
         self, subject_id: int, st: int, end: int
-    ) -> tuple[JointNestedRaggedTensorDict, StaticData]:
+    ) -> tuple[JointNestedRaggedTensorDict, StaticData | None]:
         """Loads and returns the dynamic data slice for a given subject ID and permissible event range.
 
         Args:
@@ -968,8 +971,10 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                  read for this subject's record. If None, no limit is applied.
 
         Returns:
-            The subject's dynamic data and static data. The static data is returned as a StaticData named
-            tuple with two fields: `code` and `numeric_value`.
+            The subject's dynamic data and static data. The static data is returned as a `StaticData`
+            named tuple with two fields: `code` and `numeric_value`. When
+            ``self.config.static_inclusion_mode == StaticInclusionMode.OMIT``, static columns are not
+            loaded from disk and the static-data slot is returned as `None`.
 
         Examples:
             >>> from nested_ragged_tensors.ragged_numpy import pprint_dense
@@ -1077,11 +1082,30 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             [[        nan  0.          0.        ]
              [        nan -1.4474752  -0.34049404]
              [        nan  0.          0.        ]]
+
+            In `StaticInclusionMode.OMIT` the static slot is returned as `None` rather than an
+            empty `StaticData` — the static columns are never loaded from disk in that mode, so
+            there is genuinely nothing to surface:
+
+            >>> sample_pytorch_dataset.config.static_inclusion_mode = StaticInclusionMode.OMIT
+            >>> _, static_data = sample_pytorch_dataset.load_subject_data(68729, 0, 3)
+            >>> static_data is None
+            True
+            >>> sample_pytorch_dataset.config.static_inclusion_mode = StaticInclusionMode.INCLUDE
         """
         shard, subject_idx = self.subj_locations[subject_id]
 
         dynamic_data_fp = self.config.tensorized_cohort_dir / "data" / f"{shard}.nrt"
         subject_dynamic_data = JointNestedRaggedTensorDict(tensors_fp=dynamic_data_fp)[subject_idx, st:end]
+
+        # When `static_inclusion_mode == OMIT` the static columns were not loaded from the
+        # schema parquet (see issue #45 — skipping them at `pl.read_parquet(columns=...)`
+        # time saves per-subject I/O on datasets that never consume static data). Return
+        # `None` for the static slot; callers that care about static data must already
+        # branch on `static_inclusion_mode` before touching it, and `_seeded_getitem`'s OMIT
+        # branch never reads the static slot.
+        if not self.config.includes_static:
+            return subject_dynamic_data, None
 
         subj_schema = self.schema_dfs_by_shard[shard][subject_idx]
         # `.item()` returns the polars list for a given row. When the dataset has no static
