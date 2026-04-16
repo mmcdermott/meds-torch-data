@@ -185,26 +185,34 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
         │ 2          ┆ 2021-01-02 00:00:00 ┆ 2                      │
         └────────────┴─────────────────────┴────────────────────────┘
 
-        Source order is preserved across the full-outer join, not re-sorted by `subject_id`. Here
-        subject `7` appears before `3` in the input and must appear in the same order on output.
+        Source order is preserved across the full-outer join, not re-sorted by `subject_id`.
+        The input below has subject IDs `[7, 3, 5, 2, 7, 5]` — non-monotonic in either direction,
+        with duplicate subjects that differ in whether they carry a static row — and the output
+        preserves the first-occurrence order `[7, 3, 5, 2]`. Static-only subjects (here `7` and
+        `5`) carry non-null `static_code`; dynamic-only subjects (`3` and `2`) carry `null`.
         (Regression test: polars 1.39+ stopped preserving pre-join ordering for `how="full"`.)
 
         >>> df = pl.DataFrame({
-        ...     "subject_id": [7, 7, 3, 3],
-        ...     "time": [None, datetime(2021, 1, 1), None, datetime(2021, 1, 2)],
-        ...     "code": [700, 701, 300, 301],
-        ...     "numeric_value": [1.0, 2.0, 3.0, 4.0],
+        ...     "subject_id": [7, 3, 5, 2, 7, 5],
+        ...     "time": [
+        ...         None, datetime(2021, 1, 1), None, datetime(2021, 2, 1),
+        ...         datetime(2021, 3, 1), datetime(2021, 4, 1),
+        ...     ],
+        ...     "code": [700, 300, 500, 200, 701, 501],
+        ...     "numeric_value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         ... }).lazy()
-        >>> extract_statics_and_schema(df).collect().select("subject_id")
-        shape: (2, 1)
-        ┌────────────┐
-        │ subject_id │
-        │ ---        │
-        │ i64        │
-        ╞════════════╡
-        │ 7          │
-        │ 3          │
-        └────────────┘
+        >>> extract_statics_and_schema(df).collect().select("subject_id", "static_code")
+        shape: (4, 2)
+        ┌────────────┬─────────────┐
+        │ subject_id ┆ static_code │
+        │ ---        ┆ ---         │
+        │ i64        ┆ list[i64]   │
+        ╞════════════╪═════════════╡
+        │ 7          ┆ [700]       │
+        │ 3          ┆ null        │
+        │ 5          ┆ [500]       │
+        │ 2          ┆ null        │
+        └────────────┴─────────────┘
     """
 
     static, dynamic = split_static_and_dynamic(df)
