@@ -3,6 +3,7 @@
 Only checks tokenized and tensorized outputs.
 """
 
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -61,6 +62,38 @@ def test_preprocess(tensorized_MEDS_dataset: Path):
 
         assert fp.exists(), err_str
         check_NRT_output(fp, want_NRT, f"{shard} NRT differs!")
+
+
+def test_preprocess_path_with_spaces(simple_static_MEDS: Path):
+    """MEDS_dataset_dir / output_dir containing spaces must not break the inner ETL subprocess.
+
+    The outer `MTD_preprocess` hydra invocation is run without `shell=True` so the spaces in the
+    override values reach hydra intact; the regression this guards against is the *inner*
+    `MEDS_transform-pipeline` subprocess corrupting space-containing paths when they pass
+    through via `INPUT_DIR` / `OUTPUT_DIR`.
+    """
+
+    with tempfile.TemporaryDirectory() as root_dir:
+        spaced_src = Path(root_dir) / "input with space"
+        shutil.copytree(simple_static_MEDS, spaced_src)
+
+        spaced_out = Path(root_dir) / "output with space"
+
+        command = [
+            str(PREPROCESS_SCRIPT),
+            f"MEDS_dataset_dir={spaced_src.resolve()!s}",
+            f"output_dir={spaced_out.resolve()!s}",
+        ]
+
+        out = subprocess.run(command, shell=False, check=False, capture_output=True, text=True)
+
+        assert out.returncode == 0, (
+            f"Preprocess failed on a path with spaces (rc={out.returncode}).\n"
+            f"stdout:\n{out.stdout}\nstderr:\n{out.stderr}"
+        )
+
+        assert any(spaced_out.rglob("*.parquet")), "No parquet outputs produced."
+        assert any(spaced_out.rglob("*.nrt")), "No NRT outputs produced."
 
 
 def test_preprocess_error_case():
