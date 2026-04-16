@@ -193,7 +193,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         # - `start_time` is emitted by preprocessing but never consumed downstream, so it's
         #   always skipped.
         needed_schema_cols = [DataSchema.subject_id_name, DataSchema.time_name]
-        if self.config.loads_static:
+        if self.config.includes_static:
             needed_schema_cols.extend(["static_code", "static_numeric_value"])
         needs_meas_per_event = (
             self.config.seq_sampling_strategy == SubsequenceSamplingStrategy.STEP_THROUGH
@@ -223,7 +223,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                     )
 
             df = pl.read_parquet(schema_fp, columns=needed_schema_cols, use_pyarrow=True)
-            if self.config.loads_static:
+            if self.config.includes_static:
                 df = df.with_columns(
                     pl.col("static_code").list.eval(pl.element().fill_null(0)),
                     pl.col("static_numeric_value").list.eval(pl.element().fill_null(np.nan)),
@@ -1102,7 +1102,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         # `None` for the static slot; callers that care about static data must already
         # branch on `static_inclusion_mode` before touching it, and `_seeded_getitem`'s OMIT
         # branch never reads the static slot.
-        if not self.config.loads_static:
+        if not self.config.includes_static:
             return subject_dynamic_data, None
 
         subj_schema = self.schema_dfs_by_shard[shard][subject_idx]
