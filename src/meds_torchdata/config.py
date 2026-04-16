@@ -626,15 +626,14 @@ class MEDSTorchDataConfig:
             rng: The random seed to use for subsequence sampling. If `None`, the default rng is used. If an
                 integer, a new rng is created with that seed.
             explicit_end: An optional measurement-level end index for the window. When set,
-                `process_dynamic_data` returns
-                `data[max(0, explicit_end - effective_max_seq_len) : explicit_end]` after the
-                mode-appropriate flatten, bypassing the sampler entirely. This is the
-                `STEP_THROUGH`+`BatchMode.SM` path: the dataset's index expansion pre-computes
-                per-window measurement ends that can terminate mid-event, and passes each
-                one through here so the window is measurement-level precise regardless of how
-                many measurements an event has. `None` for every other caller — including
-                `STEP_THROUGH` in SEM mode, which goes through the normal
-                `STEP_THROUGH → TO_END` sampler path.
+                the visible sequence is truncated to ``explicit_end`` before the sampler runs,
+                so the resulting window is ``data[max(0, explicit_end - max_seq_len) : explicit_end]``
+                after the mode-appropriate flatten. This is the ``STEP_THROUGH`` + ``BatchMode.SM``
+                path: the dataset's index expansion pre-computes per-window measurement ends
+                that can terminate mid-event, and passes each one through here so the window
+                is measurement-level precise regardless of how many measurements an event has.
+                ``None`` for every other caller — including ``STEP_THROUGH`` in SEM mode, which
+                goes through the normal ``STEP_THROUGH → TO_END`` sampler path.
 
         Returns:
             The processed dynamic data, still in a `JointNestedRaggedTensorDict` format.
@@ -860,5 +859,5 @@ class MEDSTorchDataConfig:
         # distribution — padding is handled by the collator downstream); `end` likewise may
         # overhang the right boundary or exceed `seq_len` for short sequences.
         st = max(0, st)
-        end = min(seq_len, end)
+        end = min(effective_seq_len, end)
         return data[st:end]
