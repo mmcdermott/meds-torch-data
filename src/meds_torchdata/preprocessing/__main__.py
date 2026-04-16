@@ -54,7 +54,7 @@ def main(cfg: DictConfig):
         synthesized_runner_path.write_text(yaml.safe_dump(synthesized))
         command_parts.extend(["--stage_runner_fp", str(synthesized_runner_path)])
     else:
-        logger.info("Running in serial mode as N_WORKERS is not set.")
+        logger.info(f"Running in serial mode (n_workers={n_workers} <= 1).")
 
     overrides: list[str] = []
     if cfg.get("do_overwrite", None) is not None:
@@ -70,8 +70,11 @@ def main(cfg: DictConfig):
         command_out = subprocess.run(full_cmd, shell=True, capture_output=True)
     finally:
         if synthesized_runner_path is not None:
-            synthesized_runner_path.unlink(missing_ok=True)
-            synthesized_runner_path.parent.rmdir()
+            try:
+                synthesized_runner_path.unlink(missing_ok=True)
+                synthesized_runner_path.parent.rmdir()
+            except OSError:
+                pass
 
     if command_out.returncode != 0:
         logger.error(f"Command failed with return code {command_out.returncode}.")

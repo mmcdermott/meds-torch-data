@@ -110,7 +110,7 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
 
     Returns:
         A `pl.LazyFrame` object containing the static data and the unique times of the subject, grouped
-        by subject as lists, in the same order as the subject IDs occurred in the original file. Each
+        by subject as lists, sorted by `subject_id` for deterministic output ordering. Each
         subject also carries a `measurements_per_event` list, parallel to the `time` list, giving the
         number of raw measurements (rows in the source dataframe) at each unique timestamp. This column
         is needed by `STEP_THROUGH` sampling in `BatchMode.SM` to map measurement-level window ends back
