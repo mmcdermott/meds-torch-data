@@ -3,6 +3,7 @@
 import logging
 from functools import partial
 
+import numpy as np
 import polars as pl
 from MEDS_transforms.mapreduce import map_stage
 from MEDS_transforms.mapreduce.shard_iteration import shard_iterator
@@ -11,6 +12,15 @@ from nested_ragged_tensors.ragged_numpy import JointNestedRaggedTensorDict
 from omegaconf import DictConfig
 
 logger = logging.getLogger(__name__)
+
+# Pin the on-disk NRT dtypes for each tensorized column. Without an explicit schema,
+# JointNestedRaggedTensorDict auto-infers dtypes from observed values, which varies
+# shard-to-shard — a small shard may land on uint8 while a large one lands on uint32.
+# Pinning `code` to int64 also makes the downstream `.long()` cast in collate a no-op,
+# and pinning the float columns to float32 avoids silent widening to float64.
+NRT_CODE_DTYPE = np.int64
+NRT_NUMERIC_DTYPE = np.float32
+NRT_TIME_DELTA_DTYPE = np.float32
 
 
 def convert_to_NRT(df: pl.LazyFrame) -> JointNestedRaggedTensorDict:
@@ -30,32 +40,44 @@ def convert_to_NRT(df: pl.LazyFrame) -> JointNestedRaggedTensorDict:
         ValueError: If there are no time delta columns or if there are multiple time delta columns.
 
     Examples:
-        >>> df = pl.DataFrame({
-        ...     "subject_id": [1, 2],
-        ...     "time_delta_days": [[float("nan"), 12.0], [float("nan")]],
-        ...     "code": [[[101.0, 102.0], [103.0]], [[201.0, 202.0]]],
-        ...     "numeric_value": [[[2.0, 3.0], [4.0]], [[6.0, 7.0]]]
-        ... })
+        >>> df = pl.DataFrame(
+        ...     {
+        ...         "subject_id": [1, 2],
+        ...         "time_delta_days": [[float("nan"), 12.0], [float("nan")]],
+        ...         "code": [[[101, 102], [103]], [[201, 202]]],
+        ...         "numeric_value": [[[2.0, 3.0], [4.0]], [[6.0, 7.0]]],
+        ...     },
+        ...     schema={
+        ...         "subject_id": pl.Int64,
+        ...         "time_delta_days": pl.List(pl.Float32),
+        ...         "code": pl.List(pl.List(pl.Int64)),
+        ...         "numeric_value": pl.List(pl.List(pl.Float32)),
+        ...     },
+        ... )
         >>> df
         shape: (2, 4)
-        ┌────────────┬─────────────────┬───────────────────────────┬─────────────────────┐
-        │ subject_id ┆ time_delta_days ┆ code                      ┆ numeric_value       │
-        │ ---        ┆ ---             ┆ ---                       ┆ ---                 │
-        │ i64        ┆ list[f64]       ┆ list[list[f64]]           ┆ list[list[f64]]     │
-        ╞════════════╪═════════════════╪═══════════════════════════╪═════════════════════╡
-        │ 1          ┆ [NaN, 12.0]     ┆ [[101.0, 102.0], [103.0]] ┆ [[2.0, 3.0], [4.0]] │
-        │ 2          ┆ [NaN]           ┆ [[201.0, 202.0]]          ┆ [[6.0, 7.0]]        │
-        └────────────┴─────────────────┴───────────────────────────┴─────────────────────┘
+        ┌────────────┬─────────────────┬─────────────────────┬─────────────────────┐
+        │ subject_id ┆ time_delta_days ┆ code                ┆ numeric_value       │
+        │ ---        ┆ ---             ┆ ---                 ┆ ---                 │
+        │ i64        ┆ list[f32]       ┆ list[list[i64]]     ┆ list[list[f32]]     │
+        ╞════════════╪═════════════════╪═════════════════════╪═════════════════════╡
+        │ 1          ┆ [NaN, 12.0]     ┆ [[101, 102], [103]] ┆ [[2.0, 3.0], [4.0]] │
+        │ 2          ┆ [NaN]           ┆ [[201, 202]]        ┆ [[6.0, 7.0]]        │
+        └────────────┴─────────────────┴─────────────────────┴─────────────────────┘
         >>> nrt = convert_to_NRT(df.lazy())
+        >>> nrt.schema  # doctest: +NORMALIZE_WHITESPACE
+        {'time_delta_days': <class 'numpy.float32'>,
+         'code': <class 'numpy.int64'>,
+         'numeric_value': <class 'numpy.float32'>}
         >>> for k, v in sorted(list(nrt.to_dense().items())):
         ...     print(k)
         ...     print(v)
         code
-        [[[101. 102.]
-          [103.   0.]]
+        [[[101 102]
+          [103   0]]
         <BLANKLINE>
-         [[201. 202.]
-          [  0.   0.]]]
+         [[201 202]
+          [  0   0]]]
         dim1/mask
         [[ True  True]
          [ True False]]
@@ -117,7 +139,12 @@ def convert_to_NRT(df: pl.LazyFrame) -> JointNestedRaggedTensorDict:
         logger.warning("All columns are empty. Returning an empty tensor dict.")
         return JointNestedRaggedTensorDict({})
 
-    return JointNestedRaggedTensorDict(tensors_dict)
+    schema = {
+        time_delta_col: NRT_TIME_DELTA_DTYPE,
+        "code": NRT_CODE_DTYPE,
+        "numeric_value": NRT_NUMERIC_DTYPE,
+    }
+    return JointNestedRaggedTensorDict(tensors_dict, schema=schema)
 
 
 @Stage.register(is_metadata=False)

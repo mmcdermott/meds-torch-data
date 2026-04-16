@@ -332,7 +332,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             >>> sample["dynamic"].to_dense()["code"]
             array([[ 5,  0,  0],
                    [ 1, 10, 11],
-                   [10, 11,  0]], dtype=uint8)
+                   [10, 11,  0]])
 
             Collated batches surface `n_subject_windows` as a `[batch_size]` tensor — use
             `1 / n_subject_windows` as a per-sample loss weight to undo oversampling:
@@ -377,7 +377,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             regardless of where event boundaries fall:
 
             >>> sm_pyd[1]["dynamic"].to_dense()["code"]
-            array([11, 10, 11, 10, 11], dtype=uint8)
+            array([11, 10, 11, 10, 11])
             >>> len(sm_pyd[1]["dynamic"])
             5
 
@@ -385,7 +385,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             5 measurements wide:
 
             >>> sm_pyd[2]["dynamic"].to_dense()["code"]
-            array([10, 11, 10, 11,  4], dtype=uint8)
+            array([10, 11, 10, 11,  4])
             >>> len(sm_pyd[2]["dynamic"])
             5
         """
