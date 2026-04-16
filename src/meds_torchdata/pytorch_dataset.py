@@ -973,7 +973,9 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
         Returns:
             The subject's dynamic data and static data. The static data is returned as a StaticData named
-            tuple with two fields: `code` and `numeric_value`.
+            tuple with two fields: `code` and `numeric_value`. When
+            ``self.config.static_inclusion_mode == StaticInclusionMode.OMIT``, static columns are not
+            loaded from disk, so the returned ``StaticData`` will contain empty lists.
 
         Examples:
             >>> from nested_ragged_tensors.ragged_numpy import pprint_dense
