@@ -541,6 +541,30 @@ class MEDSTorchDataConfig:
         return df.select(pl.col("code/vocab_index")).max().item() + 1
 
     @property
+    def includes_static(self) -> bool:
+        """Whether this config surfaces per-subject static data in the produced batches.
+
+        `True` iff `static_inclusion_mode` is not `OMIT`. Consolidates the "does this config
+        need the `static_code` / `static_numeric_value` columns?" check so the schema-parquet
+        column selection at init time and the `load_subject_data` fast-path cannot drift.
+
+        Examples:
+            >>> with tempfile.TemporaryDirectory() as tmpdir:
+            ...     cfg = MEDSTorchDataConfig(Path(tmpdir), max_seq_len=10, static_inclusion_mode="omit")
+            ...     print(cfg.includes_static)
+            False
+            >>> with tempfile.TemporaryDirectory() as tmpdir:
+            ...     cfg = MEDSTorchDataConfig(Path(tmpdir), max_seq_len=10, static_inclusion_mode="include")
+            ...     print(cfg.includes_static)
+            True
+            >>> with tempfile.TemporaryDirectory() as tmpdir:
+            ...     cfg = MEDSTorchDataConfig(Path(tmpdir), max_seq_len=10, static_inclusion_mode="prepend")
+            ...     print(cfg.includes_static)
+            True
+        """
+        return self.static_inclusion_mode != StaticInclusionMode.OMIT
+
+    @property
     def schema_dir(self) -> Path:
         """Return the schema directory for the tensorized cohort.
 
