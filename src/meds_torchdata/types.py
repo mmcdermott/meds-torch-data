@@ -97,10 +97,14 @@ class SubsequenceSamplingStrategy(StrEnum):
     ) -> int | None:
         """Subsample starting offset based on maximum sequence length and sampling strategy.
 
+        The method is an ordinary instance method on the enum; callers typically invoke it via the
+        class-level sugar `SubsequenceSamplingStrategy.subsample_st_offset(strategy, ...)`, which
+        binds `strategy` (one of `RANDOM`, `BALANCED_RANDOM`, `TO_END`, `FROM_START`,
+        `STEP_THROUGH`, or the equivalent string value) to `self` and forwards the rest.
+
         Args:
-            strategy: Strategy for selecting subsequence (RANDOM, TO_END, FROM_START)
-            seq_len: Length of the sequence
-            max_seq_len: Maximum allowed sequence length
+            seq_len: Length of the sequence.
+            max_seq_len: Maximum allowed sequence length.
             rng: Random number generator for random sampling. If None, a new generator is created. If an
                 integer, a new generator is created with that seed.
 
