@@ -874,8 +874,6 @@ class MEDSTorchDataConfig:
         effective_seq_len = min(seq_len, explicit_end) if explicit_end is not None else seq_len
 
         st = self.seq_sampling_strategy.subsample_st_offset(effective_seq_len, max_seq_len, rng=rng)
-        if st is None:
-            st = 0
         end = st + max_seq_len
 
         # Clamp the resulting slice: `BALANCED_RANDOM` can return a negative `st` so the
