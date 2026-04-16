@@ -1286,7 +1286,7 @@ class MEDSTorchBatch:
     # optional and gated by `MEDSTorchDataConfig.include_numeric_value` (controlling
     # `numeric_value` + `numeric_value_mask`) and `include_time_delta` (controlling
     # `time_delta_days`); callers may also omit `event_mask` in SM mode. See issues
-    # #46 and #47.
+    # 46 and 47.
     _REQ_TENSORS: ClassVar[list[str]] = ["code"]
 
     # Core dynamic data elements (measurement-level):
@@ -1352,6 +1352,14 @@ class MEDSTorchBatch:
                     raise TypeError(
                         f"Field '{field.name}' expected type {tensor_type}, got type {type(value)}."
                     )
+
+        # numeric_value and numeric_value_mask must be provided (or omitted) as a pair.
+        if (self.numeric_value is None) != (self.numeric_value_mask is None):
+            raise ValueError(
+                "numeric_value and numeric_value_mask must both be provided or both be None, "
+                f"but got numeric_value={'present' if self.numeric_value is not None else 'None'} "
+                f"and numeric_value_mask={'present' if self.numeric_value_mask is not None else 'None'}."
+            )
 
         # Dynamic-field shape checks. `time_delta_days`, `numeric_value`, and
         # `numeric_value_mask` are all optional now (see `_REQ_TENSORS` — gated by
