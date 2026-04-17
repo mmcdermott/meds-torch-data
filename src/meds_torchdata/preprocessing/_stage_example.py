@@ -123,6 +123,11 @@ class MTDStageExample(StageExample):
 
 
 def _check_parquet(rel_path: str, actual_fp: Path, want_cols: dict, df_check_kwargs: dict) -> None:
+    if not isinstance(want_cols, dict):
+        raise AssertionError(
+            f"Parquet spec for {rel_path} must be a mapping from column name to values; "
+            f"got {type(want_cols).__name__}."
+        )
     got = pl.read_parquet(actual_fp)
     want = pl.DataFrame(want_cols)
     # YAML doesn't natively express polars dtypes (u32 vs i64, f32 vs f64, etc.), so leave
@@ -138,6 +143,11 @@ def _check_parquet(rel_path: str, actual_fp: Path, want_cols: dict, df_check_kwa
 
 
 def _check_nrt(rel_path: str, actual_fp: Path, want_tensors: dict) -> None:
+    if not isinstance(want_tensors, dict):
+        raise AssertionError(
+            f"NRT spec for {rel_path} must be a mapping from tensor name to values; "
+            f"got {type(want_tensors).__name__}."
+        )
     got_nrt = JointNestedRaggedTensorDict(tensors_fp=actual_fp)
     want_nrt = JointNestedRaggedTensorDict(want_tensors)
 

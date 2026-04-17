@@ -1,10 +1,12 @@
-"""Automated stage tests driven by `@Stage.register(examples_dir=...)`.
+"""Automated stage tests driven by registered `StageExample` scenarios.
 
 Each stage's registered example scenarios are materialized into a fresh temp dir, the stage
 is run via `MEDS_transform-stage`, and the outputs are validated against the scenario's
 declared expectations. The `stage_example` fixture and its parametrization come from
 `MEDS_transforms.pytest_plugin`, which is auto-loaded via the `meds-transforms` package's
-`pytest11` entry point.
+`pytest11` entry point. Our stage modules live at
+`preprocessing/<stage>/<stage>.py` with an adjacent `<stage>/examples/` subdir, which lets
+`Stage.register` auto-infer `examples_dir` without an explicit argument.
 
 The pipeline test runs tokenization + tensorization end-to-end via `MEDS_transform-pipeline`
 and validates each stage's output against its registered `out_data.yaml`. We scope it to our

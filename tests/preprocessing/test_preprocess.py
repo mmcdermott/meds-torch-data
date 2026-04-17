@@ -10,8 +10,6 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from . import PREPROCESS_SCRIPT
 
 HELP_STR = """
@@ -74,21 +72,22 @@ def test_preprocess_path_with_spaces(simple_static_MEDS: Path):
         assert any(spaced_out.rglob("*.nrt")), "No NRT outputs produced."
 
 
-@pytest.mark.parallelized
 def test_preprocess_stage_runner_fp_passthrough(simple_static_MEDS: Path):
     """Covers `MTD_preprocess`'s `stage_runner_fp=` hydra-override plumbing.
 
     `test_stages.py::test_pipeline_parallel` invokes `MEDS_transform-pipeline` directly via
     `pipeline_tester`, skipping our `__main__.py` wrapper. This test fills the gap by running
-    `MTD_preprocess` with a user-supplied stage runner YAML and confirming the wrapper
-    forwards `stage_runner_fp` through to the inner `MEDS_transform-pipeline --stage_runner_fp`
-    call. Gated on `@pytest.mark.parallelized` because the runner configures the joblib
-    launcher (`hydra-joblib-launcher`, optional).
+    `MTD_preprocess` with a stage runner YAML that references a launcher no installed package
+    provides. If the wrapper correctly forwards `--stage_runner_fp`, the inner pipeline fails
+    while trying to resolve the launcher (and the failure surfaces the launcher name). If the
+    wrapper silently dropped `stage_runner_fp`, the pipeline would instead succeed in the
+    default serial mode — a false positive the earlier version of this test would not catch.
     """
 
+    sentinel_launcher = "__mtd_passthrough_sentinel_launcher__"
     with tempfile.TemporaryDirectory() as root_dir:
         runner_fp = Path(root_dir) / "stage_runner.yaml"
-        runner_fp.write_text("parallelize:\n  n_workers: 2\n  launcher: joblib\n")
+        runner_fp.write_text(f"parallelize:\n  launcher: {sentinel_launcher}\n")
 
         cohort_dir = Path(root_dir) / "cohort"
         command = [
@@ -99,11 +98,17 @@ def test_preprocess_stage_runner_fp_passthrough(simple_static_MEDS: Path):
         ]
         out = subprocess.run(command, shell=False, check=False, capture_output=True, text=True)
 
-        assert out.returncode == 0, (
-            f"MTD_preprocess with stage_runner_fp failed (rc={out.returncode}).\n"
+        combined = out.stdout + out.stderr
+        assert out.returncode != 0, (
+            "MTD_preprocess should fail when stage_runner_fp references a nonexistent launcher; "
+            "a successful run implies the wrapper silently dropped `stage_runner_fp`.\n"
             f"stdout:\n{out.stdout}\nstderr:\n{out.stderr}"
         )
-        assert any(cohort_dir.rglob("*.nrt")), "No NRT outputs produced."
+        assert sentinel_launcher in combined, (
+            "Expected failure output to mention the sentinel launcher, confirming the runner "
+            "YAML was actually loaded by the inner `MEDS_transform-pipeline` invocation.\n"
+            f"stdout:\n{out.stdout}\nstderr:\n{out.stderr}"
+        )
 
 
 def test_preprocess_error_case():
