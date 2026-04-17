@@ -1,12 +1,14 @@
 # Expected tensorization output: one NRT per input shard.
 # Nested-list format is fed directly into `JointNestedRaggedTensorDict(dict)` by `MTDStageExample`.
+# Values match `tokenization_examples/out_data.yaml`'s event_seqs — the stages chain
+# through `pipeline_tester` in `tests/preprocessing/test_stages.py::test_pipeline`.
 data/train/0.nrt:
   time_delta_days:
-    - [.nan, 1.0]
-    - [.nan]
+    - [.nan, 10.0]
+    - [.nan, 2.0]
   code:
     - [[10, 11], [12]]
-    - [[20, 21, 22]]
+    - [[20, 21], [22]]
   numeric_value:
-    - [[0.5, .nan], [1.5]]
-    - [[.nan, 2.5, 3.5]]
+    - [[0.5, 0.7], [1.2]]
+    - [[5.5, 5.7], [6.2]]

@@ -43,6 +43,14 @@ docs = [
 
 [tool.setuptools_scm]
 
+[tool.setuptools.package-data]
+# Ship packaged YAML assets (pipeline configs + stage-example scenarios) in wheels.
+# `setuptools_scm` already auto-includes git-tracked files, but declaring this explicitly
+# keeps the bundling correct if/when that machinery is changed or disabled.
+"meds_torchdata.preprocessing.configs" = ["*.yaml"]
+"meds_torchdata.preprocessing.tokenization_examples" = ["**/*.yaml"]
+"meds_torchdata.preprocessing.tensorization_examples" = ["**/*.yaml"]
+
 [project.optional-dependencies]
 parallelized = ["hydra-joblib-launcher~=1.2.0"]
 lightning = ["lightning~=2.5.1"]

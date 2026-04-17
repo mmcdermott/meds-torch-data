@@ -1,6 +1,8 @@
-"""Tests the full, multi-stage pre-processing pipeline.
+"""CLI-level tests for the `MTD_preprocess` entrypoint.
 
-Only checks tokenized and tensorized outputs.
+End-to-end pipeline semantics (stage chain + output validation) live in
+`test_stages.py::test_pipeline_*`. This file covers the wrapper's CLI contract only:
+help output, space-containing paths, and the missing-input error path.
 """
 
 import shutil
@@ -8,11 +10,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-import polars as pl
-
-from . import PREPROCESS_SCRIPT, assert_df_equal, check_NRT_output
-from .test_tensorization import WANT_NRTS
-from .test_tokenization import WANT_SCHEMAS
+from . import PREPROCESS_SCRIPT
 
 HELP_STR = """
 == MTD_preprocess ==
@@ -40,28 +38,6 @@ def test_preprocess_help():
     out = subprocess.run(f"{PREPROCESS_SCRIPT} --help", shell=True, check=True, capture_output=True)
     assert out.returncode == 0
     assert out.stdout.decode().strip() == HELP_STR.strip()
-
-
-def test_preprocess(tensorized_MEDS_dataset: Path):
-    cohort_dir = tensorized_MEDS_dataset
-
-    cohort_dir_contents = list(cohort_dir.rglob("*.parquet")) + list(cohort_dir.rglob("*.nrt"))
-    cohort_dir_contents_str = "\n".join(f"  - {f.relative_to(cohort_dir)}" for f in cohort_dir_contents)
-
-    for shard, want_schema in WANT_SCHEMAS.items():
-        fp = cohort_dir / f"tokenization/{shard}.parquet"
-        err_str = f"Expected output file {fp} not found. Directory contents:\n" + cohort_dir_contents_str
-
-        assert fp.exists(), err_str
-        got_schema = pl.read_parquet(fp)
-        assert_df_equal(got_schema, want_schema, check_column_order=False)
-
-    for shard, want_NRT in WANT_NRTS.items():
-        fp = cohort_dir / f"data/{shard}"
-        err_str = f"Expected output file {fp} not found. Directory contents:\n" + cohort_dir_contents_str
-
-        assert fp.exists(), err_str
-        check_NRT_output(fp, want_NRT, f"{shard} NRT differs!")
 
 
 def test_preprocess_path_with_spaces(simple_static_MEDS: Path):

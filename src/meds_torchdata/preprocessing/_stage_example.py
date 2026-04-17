@@ -67,32 +67,46 @@ class MTDStageExample(StageExample):
         in_fp = example_dir / "in.yaml"
         stage_cfg_fp = example_dir / "cfg.yaml"
 
+        stage_cfg = {}
+        if stage_cfg_fp.is_file():
+            stage_cfg = safe_load(stage_cfg_fp.read_text()) or {}
+            if not isinstance(stage_cfg, dict):
+                raise TypeError(f"{stage_cfg_fp} must contain a YAML mapping; got {type(stage_cfg).__name__}")
+
         return cls(
             stage_name=stage_name,
             scenario_name=scenario_name,
             want_data=want_data_fp if want_data_fp.is_file() else None,
             in_data=in_fp if in_fp.is_file() else None,
-            stage_cfg=safe_load(stage_cfg_fp.read_text()) if stage_cfg_fp.is_file() else {},
+            stage_cfg=stage_cfg,
         )
 
     def check_outputs(self, output_dir: Path, is_resolved_dir: bool = False) -> None:
         if self.want_data is None:
             return
 
-        if is_resolved_dir:
-            raise NotImplementedError(
-                "MTDStageExample does not support is_resolved_dir=True — our shard paths "
-                "are declared relative to the cohort root (e.g. 'schemas/train/0.parquet'), "
-                "not to a single resolved `data/` or `metadata/` subdirectory."
-            )
-
         spec = safe_load(self.want_data.read_text())
+        if not isinstance(spec, dict):
+            raise AssertionError(
+                f"{self.want_data} must contain a top-level mapping from shard-relative paths "
+                f"to expected output contents; got {type(spec).__name__}."
+            )
         for rel_path, contents in spec.items():
-            actual_fp = output_dir / rel_path
+            # Paths in `out_data.yaml` are relative to the cohort root in standalone mode
+            # (e.g. `data/schemas/train/0.parquet`). Under `pipeline_tester`'s intermediate-
+            # stage validation, `output_dir` is already resolved to the stage's per-stage
+            # subdir (`${cohort}/<stage_name>/`), so the leading `data/` segment has been
+            # absorbed. Strip it when `is_resolved_dir=True`.
+            effective_rel = rel_path
+            if is_resolved_dir and effective_rel.startswith("data/"):
+                effective_rel = effective_rel[len("data/") :]
+            actual_fp = output_dir / effective_rel
+
             if not actual_fp.is_file():
                 existing = sorted(p.relative_to(output_dir) for p in output_dir.rglob("*") if p.is_file())
                 raise AssertionError(
-                    f"Expected output file {rel_path} not found in {output_dir}. Existing files: {existing}"
+                    f"Expected output file {effective_rel} not found in {output_dir}. "
+                    f"Existing files: {existing}"
                 )
 
             suffix = Path(rel_path).suffix
