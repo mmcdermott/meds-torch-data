@@ -2,7 +2,6 @@
 
 import logging
 from functools import partial
-from pathlib import Path
 
 import numpy as np
 import polars as pl
@@ -12,7 +11,7 @@ from MEDS_transforms.stages import Stage
 from nested_ragged_tensors.ragged_numpy import JointNestedRaggedTensorDict
 from omegaconf import DictConfig
 
-from ._stage_example import MTDStageExample
+from .._stage_example import MTDStageExample
 
 logger = logging.getLogger(__name__)
 
@@ -150,11 +149,7 @@ def convert_to_NRT(df: pl.LazyFrame) -> JointNestedRaggedTensorDict:
     return JointNestedRaggedTensorDict(tensors_dict, schema=schema)
 
 
-@Stage.register(
-    is_metadata=False,
-    example_class=MTDStageExample,
-    examples_dir=Path(__file__).parent / "tensorization_examples",
-)
+@Stage.register(is_metadata=False, example_class=MTDStageExample)
 def main(cfg: DictConfig):
     """Tensorizes the data into the nested ragged tensor formulation.
 
