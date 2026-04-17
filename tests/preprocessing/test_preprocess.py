@@ -10,6 +10,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from . import PREPROCESS_SCRIPT
 
 HELP_STR = """
@@ -70,6 +72,38 @@ def test_preprocess_path_with_spaces(simple_static_MEDS: Path):
 
         assert any(spaced_out.rglob("*.parquet")), "No parquet outputs produced."
         assert any(spaced_out.rglob("*.nrt")), "No NRT outputs produced."
+
+
+@pytest.mark.parallelized
+def test_preprocess_stage_runner_fp_passthrough(simple_static_MEDS: Path):
+    """Covers `MTD_preprocess`'s `stage_runner_fp=` hydra-override plumbing.
+
+    `test_stages.py::test_pipeline_parallel` invokes `MEDS_transform-pipeline` directly via
+    `pipeline_tester`, skipping our `__main__.py` wrapper. This test fills the gap by running
+    `MTD_preprocess` with a user-supplied stage runner YAML and confirming the wrapper
+    forwards `stage_runner_fp` through to the inner `MEDS_transform-pipeline --stage_runner_fp`
+    call. Gated on `@pytest.mark.parallelized` because the runner configures the joblib
+    launcher (`hydra-joblib-launcher`, optional).
+    """
+
+    with tempfile.TemporaryDirectory() as root_dir:
+        runner_fp = Path(root_dir) / "stage_runner.yaml"
+        runner_fp.write_text("parallelize:\n  n_workers: 2\n  launcher: joblib\n")
+
+        cohort_dir = Path(root_dir) / "cohort"
+        command = [
+            PREPROCESS_SCRIPT,
+            f"MEDS_dataset_dir={simple_static_MEDS!s}",
+            f"output_dir={cohort_dir!s}",
+            f"stage_runner_fp={runner_fp!s}",
+        ]
+        out = subprocess.run(command, shell=False, check=False, capture_output=True, text=True)
+
+        assert out.returncode == 0, (
+            f"MTD_preprocess with stage_runner_fp failed (rc={out.returncode}).\n"
+            f"stdout:\n{out.stdout}\nstderr:\n{out.stderr}"
+        )
+        assert any(cohort_dir.rglob("*.nrt")), "No NRT outputs produced."
 
 
 def test_preprocess_error_case():

@@ -30,7 +30,7 @@ def test_pipeline_serial():
     pipeline_tester(
         pipeline_yaml=_PIPELINE_YAML,
         stage_runner_yaml=None,
-        stage_scenario_sequence=["tokenization", "tensorization"],
+        stage_scenario_sequence=["tokenization/default", "tensorization/default"],
     )
 
 
@@ -44,5 +44,5 @@ def test_pipeline_parallel():
     pipeline_tester(
         pipeline_yaml=_PIPELINE_YAML,
         stage_runner_yaml="parallelize:\n  n_workers: 2\n  launcher: joblib\n",
-        stage_scenario_sequence=["tokenization", "tensorization"],
+        stage_scenario_sequence=["tokenization/default", "tensorization/default"],
     )
