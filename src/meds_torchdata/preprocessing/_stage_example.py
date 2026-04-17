@@ -131,15 +131,9 @@ def _compare(expected_fp: Path, actual_fp: Path, rel: Path, df_check_kwargs: dic
             )
             for k, want_v in want.tensors.items():
                 got_v = got.tensors[k]
-                if isinstance(want_v, list):
-                    for i, (w, g) in enumerate(zip(want_v, got_v, strict=True)):
-                        assert np.array_equal(w, g, equal_nan=True), (
-                            f"NRT {rel} tensor '{k}[{i}]' differs.\nGot: {g}\nWant: {w}"
-                        )
-                else:
-                    assert np.array_equal(want_v, got_v, equal_nan=True), (
-                        f"NRT {rel} tensor '{k}' differs.\nGot: {got_v}\nWant: {want_v}"
-                    )
+                assert np.array_equal(want_v, got_v, equal_nan=True), (
+                    f"NRT {rel} tensor '{k}' differs.\nGot: {got_v}\nWant: {want_v}"
+                )
         case _:
             raise AssertionError(
                 f"Unsupported output suffix '{expected_fp.suffix}' for {rel}. "
