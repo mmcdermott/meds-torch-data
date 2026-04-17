@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from . import PREPROCESS_SCRIPT
+PREPROCESS_SCRIPT = "MTD_preprocess"
 
 HELP_STR = """
 == MTD_preprocess ==

@@ -120,6 +120,10 @@ def _compare(expected_fp: Path, actual_fp: Path, rel: Path, df_check_kwargs: dic
             except AssertionError as e:
                 raise AssertionError(f"Parquet {rel} differs.\nGot:\n{got}\nWant:\n{want}") from e
         case ".nrt":
+            # Can't use `want == got` — `JointNestedRaggedTensorDict.__eq__` compares via
+            # `np.array_equal` without `equal_nan=True`, so any NaN (e.g., the leading
+            # `time_delta`) makes the comparison return False. See upstream issue:
+            # https://github.com/mmcdermott/nested_ragged_tensors/issues/63
             got = JointNestedRaggedTensorDict(tensors_fp=actual_fp)
             want = JointNestedRaggedTensorDict(tensors_fp=expected_fp)
             assert set(got.tensors) == set(want.tensors), (

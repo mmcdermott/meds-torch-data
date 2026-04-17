@@ -26,6 +26,15 @@ def test_stage_example(stage_example):
 
 _PIPELINE_YAML = "input_dir: {input_dir}\noutput_dir: {output_dir}\nstages: [tokenization, tensorization]\n"
 
+# Note: these pipeline tests do NOT exercise the `MTD_preprocess` CLI wrapper — they invoke
+# `MEDS_transform-pipeline` directly through upstream's `pipeline_tester`. The wrapper's
+# own CLI contract (hydra override parsing, `stage_runner_fp` passthrough, env-dict INPUT_DIR
+# / OUTPUT_DIR passing) is covered separately in `test_preprocess.py`. This indirection is
+# awkward — we test the stage internals through a different entry point than our users will
+# — but `pipeline_tester` hardcodes the command to `MEDS_transform-pipeline` with no hook to
+# substitute `MTD_preprocess` (`run_fn` lets you swap the subprocess runner but not the
+# command list). Worth revisiting if upstream adds a command-override parameter.
+
 
 def test_pipeline_serial():
     """Chain tokenization → tensorization through `MEDS_transform-pipeline` in serial mode."""
