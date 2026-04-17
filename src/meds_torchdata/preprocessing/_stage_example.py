@@ -9,12 +9,11 @@ stages fits that mold:
   (static_code, time, measurements_per_event, …) that are not MEDS-format.
 - **tensorization** writes `.nrt` (JointNestedRaggedTensorDict) files under `data/<shard>.nrt`.
 
-One shared subclass is enough. Expected outputs are declared in a yaml_to_disk-style
-`out_data.yaml` mapping shard-relative paths to either a column-map (for `.parquet` paths)
-or a tensor-map (for `.nrt` paths). `check_outputs` dispatches on the suffix.
-
-Modeled on the upstream `JsonOutputStageExample` in `simple_example_pkg` — see
-https://github.com/mmcdermott/MEDS_transforms/blob/main/example/simple_example_pkg/src/simple_example_pkg/export_code_summary/export_code_summary.py
+Expected outputs are declared in an `out_data.yaml` mapping shard-relative paths to structured
+file contents. `check_outputs` materializes that YAML to a temp dir via `yaml_to_disk` (which
+handles `.parquet` natively and `.nrt` via the `NRTFile` plugin in `_nrt_file.py`), then
+walks the materialized tree and file-by-file compares each expected file to the stage's
+actual output.
 """
 
 from __future__ import annotations
@@ -28,33 +27,21 @@ from MEDS_transforms.stages.examples import StageExample
 from nested_ragged_tensors.ragged_numpy import JointNestedRaggedTensorDict
 from polars.testing import assert_frame_equal
 from yaml import safe_load
+from yaml_to_disk import yaml_disk
 
 
 @dataclass
 class MTDStageExample(StageExample):
-    """`StageExample` subclass that validates `.parquet` and `.nrt` outputs.
+    """`StageExample` subclass that validates `.parquet` and `.nrt` outputs via yaml_to_disk.
 
-    The expected-output spec (`out_data.yaml`) is a flat mapping from shard-relative path to
-    structured data:
-
-        # out_data.yaml
-        schemas/train/0.parquet:
-          subject_id: [239684, 1195293]
-          static_code: [[7, 9], [6, 9]]
-          ...
-        data/train/0.nrt:
-          code: [[[5], [1, 10, 11], ...], ...]
-          time_delta_days: [[.nan, ...], ...]
-          numeric_value: [[[.nan], ...], ...]
-
-    Paths ending in `.parquet` are compared against polars DataFrames (via
-    `polars.testing.assert_frame_equal`). Paths ending in `.nrt` are compared against
-    `JointNestedRaggedTensorDict` tensors (via `np.array_equal(equal_nan=True)` per key).
+    `yaml_to_disk` materializes the `out_data.yaml` spec into a real directory of
+    `.parquet` / `.nrt` files (the former natively, the latter via the `NRTFile` plugin
+    registered in `pyproject.toml`). `check_outputs` then compares each materialized
+    expected file to the stage's actual output — Polars `assert_frame_equal` for parquet,
+    per-tensor `np.array_equal(equal_nan=True)` for NRT.
     """
 
     # Redeclare as Path — `want_data` here is a yaml spec file, not a parsed MEDSDataset.
-    # (The parent expects a MEDSDataset; we repurpose the slot the same way the upstream
-    # `JsonOutputStageExample` does.)
     want_data: Path | None = None
 
     @classmethod
@@ -85,88 +72,65 @@ class MTDStageExample(StageExample):
         if self.want_data is None:
             return
 
-        spec = safe_load(self.want_data.read_text())
-        if not isinstance(spec, dict):
-            raise AssertionError(
-                f"{self.want_data} must contain a top-level mapping from shard-relative paths "
-                f"to expected output contents; got {type(spec).__name__}."
-            )
-        for rel_path, contents in spec.items():
-            # Paths in `out_data.yaml` are relative to the cohort root in standalone mode
-            # (e.g. `data/schemas/train/0.parquet`). Under `pipeline_tester`'s intermediate-
-            # stage validation, `output_dir` is already resolved to the stage's per-stage
-            # subdir (`${cohort}/<stage_name>/`), so the leading `data/` segment has been
-            # absorbed. Strip it when `is_resolved_dir=True`.
-            effective_rel = rel_path
-            if is_resolved_dir and effective_rel.startswith("data/"):
-                effective_rel = effective_rel[len("data/") :]
-            actual_fp = output_dir / effective_rel
+        with yaml_disk(self.want_data) as expected_root:
+            for expected_fp in sorted(expected_root.rglob("*")):
+                if not expected_fp.is_file():
+                    continue
 
-            if not actual_fp.is_file():
-                existing = sorted(p.relative_to(output_dir) for p in output_dir.rglob("*") if p.is_file())
-                raise AssertionError(
-                    f"Expected output file {effective_rel} not found in {output_dir}. "
-                    f"Existing files: {existing}"
-                )
+                rel = expected_fp.relative_to(expected_root)
 
-            suffix = Path(rel_path).suffix
-            match suffix:
-                case ".parquet":
-                    _check_parquet(rel_path, actual_fp, contents, self.df_check_kwargs)
-                case ".nrt":
-                    _check_nrt(rel_path, actual_fp, contents)
-                case _:
+                # Paths in `out_data.yaml` are relative to the cohort root (e.g.
+                # `data/schemas/train/0.parquet`). Under `pipeline_tester`'s per-stage
+                # validation, `output_dir` is already resolved to `${cohort}/<stage_name>/`
+                # so the leading `data/` segment has been absorbed by the caller.
+                if is_resolved_dir and rel.parts and rel.parts[0] == "data":
+                    actual_rel = Path(*rel.parts[1:])
+                else:
+                    actual_rel = rel
+                actual_fp = output_dir / actual_rel
+
+                if not actual_fp.is_file():
+                    existing = sorted(p.relative_to(output_dir) for p in output_dir.rglob("*") if p.is_file())
                     raise AssertionError(
-                        f"Unsupported output suffix '{suffix}' for {rel_path}. "
-                        f"MTDStageExample handles '.parquet' and '.nrt' only."
+                        f"Expected output file {actual_rel} not found in {output_dir}. "
+                        f"Existing files: {existing}"
                     )
 
-
-def _check_parquet(rel_path: str, actual_fp: Path, want_cols: dict, df_check_kwargs: dict) -> None:
-    if not isinstance(want_cols, dict):
-        raise AssertionError(
-            f"Parquet spec for {rel_path} must be a mapping from column name to values; "
-            f"got {type(want_cols).__name__}."
-        )
-    got = pl.read_parquet(actual_fp)
-    want = pl.DataFrame(want_cols)
-    # YAML doesn't natively express polars dtypes (u32 vs i64, f32 vs f64, etc.), so leave
-    # `check_dtypes` off by default and let callers override via `df_check_kwargs` when they
-    # want strict dtype validation. Value comparison + structural shape is the contract.
-    kwargs = {"check_column_order": False, "check_dtypes": False, **df_check_kwargs}
-    try:
-        assert_frame_equal(got, want, **kwargs)
-    except AssertionError as e:
-        raise AssertionError(
-            f"Parquet output {rel_path} differs from expected.\nGot:\n{got}\nWant:\n{want}"
-        ) from e
+                _compare(expected_fp, actual_fp, rel, self.df_check_kwargs)
 
 
-def _check_nrt(rel_path: str, actual_fp: Path, want_tensors: dict) -> None:
-    if not isinstance(want_tensors, dict):
-        raise AssertionError(
-            f"NRT spec for {rel_path} must be a mapping from tensor name to values; "
-            f"got {type(want_tensors).__name__}."
-        )
-    got_nrt = JointNestedRaggedTensorDict(tensors_fp=actual_fp)
-    want_nrt = JointNestedRaggedTensorDict(want_tensors)
-
-    got_keys, want_keys = set(got_nrt.tensors), set(want_nrt.tensors)
-    assert got_keys == want_keys, (
-        f"NRT {rel_path} tensor keys differ. Want {sorted(want_keys)}, got {sorted(got_keys)}."
-    )
-
-    for k, want in want_nrt.tensors.items():
-        got = got_nrt.tensors[k]
-        if isinstance(want, list):
-            assert len(want) == len(got), (
-                f"NRT {rel_path} tensor '{k}' has {len(got)} elements, want {len(want)}."
+def _compare(expected_fp: Path, actual_fp: Path, rel: Path, df_check_kwargs: dict) -> None:
+    match expected_fp.suffix:
+        case ".parquet":
+            # YAML can't express polars dtypes (u32 vs i64, f32 vs f64, etc.) and pyarrow's
+            # type inference diverges from polars' for nested lists, so leave `check_dtypes`
+            # off by default and let callers override via `df_check_kwargs`.
+            kwargs = {"check_column_order": False, "check_dtypes": False, **df_check_kwargs}
+            got = pl.read_parquet(actual_fp)
+            want = pl.read_parquet(expected_fp)
+            try:
+                assert_frame_equal(got, want, **kwargs)
+            except AssertionError as e:
+                raise AssertionError(f"Parquet {rel} differs.\nGot:\n{got}\nWant:\n{want}") from e
+        case ".nrt":
+            got = JointNestedRaggedTensorDict(tensors_fp=actual_fp)
+            want = JointNestedRaggedTensorDict(tensors_fp=expected_fp)
+            assert set(got.tensors) == set(want.tensors), (
+                f"NRT {rel} tensor keys differ. Want {sorted(want.tensors)}, got {sorted(got.tensors)}."
             )
-            for i, (w, g) in enumerate(zip(want, got, strict=True)):
-                assert np.array_equal(w, g, equal_nan=True), (
-                    f"NRT {rel_path} tensor '{k}[{i}]' differs.\nGot: {g}\nWant: {w}"
-                )
-        else:
-            assert np.array_equal(want, got, equal_nan=True), (
-                f"NRT {rel_path} tensor '{k}' differs.\nGot: {got}\nWant: {want}"
+            for k, want_v in want.tensors.items():
+                got_v = got.tensors[k]
+                if isinstance(want_v, list):
+                    for i, (w, g) in enumerate(zip(want_v, got_v, strict=True)):
+                        assert np.array_equal(w, g, equal_nan=True), (
+                            f"NRT {rel} tensor '{k}[{i}]' differs.\nGot: {g}\nWant: {w}"
+                        )
+                else:
+                    assert np.array_equal(want_v, got_v, equal_nan=True), (
+                        f"NRT {rel} tensor '{k}' differs.\nGot: {got_v}\nWant: {want_v}"
+                    )
+        case _:
+            raise AssertionError(
+                f"Unsupported output suffix '{expected_fp.suffix}' for {rel}. "
+                f"MTDStageExample handles '.parquet' and '.nrt' only."
             )
