@@ -29,6 +29,8 @@ from polars.testing import assert_frame_equal
 from yaml import safe_load
 from yaml_to_disk import yaml_disk
 
+_ALLOWED_SUFFIXES = frozenset({".parquet", ".nrt"})
+
 
 @dataclass
 class MTDStageExample(StageExample):
@@ -73,30 +75,35 @@ class MTDStageExample(StageExample):
             return
 
         with yaml_disk(self.want_data) as expected_root:
-            for expected_fp in sorted(expected_root.rglob("*")):
-                if not expected_fp.is_file():
-                    continue
-
-                rel = expected_fp.relative_to(expected_root)
-
-                # Paths in `out_data.yaml` are relative to the cohort root (e.g.
-                # `data/schemas/train/0.parquet`). Under `pipeline_tester`'s per-stage
-                # validation, `output_dir` is already resolved to `${cohort}/<stage_name>/`
-                # so the leading `data/` segment has been absorbed by the caller.
+            # Under pipeline_tester's per-stage validation, `output_dir` is already resolved
+            # to `${cohort}/<stage_name>/`, so the leading `data/` segment in expected paths
+            # has been absorbed by the caller.
+            def _canonical(rel: Path) -> Path:
                 if is_resolved_dir and rel.parts and rel.parts[0] == "data":
-                    actual_rel = Path(*rel.parts[1:])
-                else:
-                    actual_rel = rel
-                actual_fp = output_dir / actual_rel
+                    return Path(*rel.parts[1:])
+                return rel
 
-                if not actual_fp.is_file():
-                    existing = sorted(p.relative_to(output_dir) for p in output_dir.rglob("*") if p.is_file())
-                    raise AssertionError(
-                        f"Expected output file {actual_rel} not found in {output_dir}. "
-                        f"Existing files: {existing}"
-                    )
+            expected = {
+                _canonical(fp.relative_to(expected_root)): fp
+                for fp in expected_root.rglob("*")
+                if fp.is_file() and fp.suffix in _ALLOWED_SUFFIXES
+            }
+            # Scan only the top-level dirs present in `expected` so we don't pick up
+            # unrelated artifacts (upstream MEDS metadata, hydra logs, etc.).
+            actual = {
+                fp.relative_to(output_dir): fp
+                for top in {rel.parts[0] for rel in expected}
+                for fp in (output_dir / top).rglob("*")
+                if fp.is_file() and fp.suffix in _ALLOWED_SUFFIXES
+            }
 
-                _compare(expected_fp, actual_fp, rel, self.df_check_kwargs)
+            assert expected.keys() == actual.keys(), (
+                f"Output file set mismatch in {output_dir}.\n"
+                f"Missing:    {sorted(expected.keys() - actual.keys())}\n"
+                f"Unexpected: {sorted(actual.keys() - expected.keys())}"
+            )
+            for rel in sorted(expected):
+                _compare(expected[rel], actual[rel], rel, self.df_check_kwargs)
 
 
 def _compare(expected_fp: Path, actual_fp: Path, rel: Path, df_check_kwargs: dict) -> None:
