@@ -1580,21 +1580,53 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             │ │ │ │   [False,  True,  True],
             │ │ │ │   [False,  True,  True]]]
 
-            Regression test for the `PREPEND + SM + include_time_delta=False` interaction: the
-            static-mask sizing for SM+PREPEND used to read its sequence-length axis from
-            `time_delta_days`, which silently disappears when `include_time_delta=False`. The
-            current implementation reads the axis from `code` (always present), so the
-            composition still produces a correctly-shaped static mask:
+            Omission-flag coverage: every `(include_numeric_value, include_time_delta)`
+            combination, in the trickiest structural context (SM + PREPEND). Keeping the
+            four cases in one snippet so the setup state is explicit and not borrowed from
+            earlier doctests.
+
+            Baseline — both flags on:
 
             >>> sample_pytorch_dataset.config.batch_mode = "SM"
-            >>> sample_pytorch_dataset.config.include_numeric_value = False
-            >>> sample_pytorch_dataset.config.include_time_delta = False
+            >>> sample_pytorch_dataset.config.padding_side = "right"
+            >>> sample_pytorch_dataset.config.static_inclusion_mode = StaticInclusionMode.PREPEND
+            >>> sample_pytorch_dataset.config.seq_sampling_strategy = SubsequenceSamplingStrategy.TO_END
+            >>> sample_pytorch_dataset.config.include_numeric_value = True
+            >>> sample_pytorch_dataset.config.include_time_delta = True
             >>> raw_batch = [sample_pytorch_dataset[2], sample_pytorch_dataset[3]]
             >>> batch = sample_pytorch_dataset.collate(raw_batch)
-            >>> batch.numeric_value is None and batch.time_delta_days is None
-            True
-            >>> batch.static_mask.shape == batch.code.shape
-            True
+            >>> (batch.numeric_value is None, batch.numeric_value_mask is None, batch.time_delta_days is None)
+            (False, False, False)
+
+            `include_numeric_value=False` — numeric_value *and* its mask vanish:
+
+            >>> sample_pytorch_dataset.config.include_numeric_value = False
+            >>> batch = sample_pytorch_dataset.collate(raw_batch)
+            >>> (batch.numeric_value is None, batch.numeric_value_mask is None, batch.time_delta_days is None)
+            (True, True, False)
+
+            `include_time_delta=False` — the SM+PREPEND regression case. The static-mask
+            sizing used to read its sequence-length axis from `time_delta_days`, which
+            silently disappears when that flag goes off; the current implementation reads
+            the axis from `code` (always present), so the mask still has the right shape.
+
+            >>> sample_pytorch_dataset.config.include_numeric_value = True
+            >>> sample_pytorch_dataset.config.include_time_delta = False
+            >>> batch = sample_pytorch_dataset.collate(raw_batch)
+            >>> (batch.numeric_value is None, batch.time_delta_days is None,
+            ...  batch.static_mask.shape == batch.code.shape)
+            (False, True, True)
+
+            Both off together:
+
+            >>> sample_pytorch_dataset.config.include_numeric_value = False
+            >>> batch = sample_pytorch_dataset.collate(raw_batch)
+            >>> (batch.numeric_value is None, batch.time_delta_days is None,
+            ...  batch.static_mask.shape == batch.code.shape)
+            (True, True, True)
+
+            Restore defaults so later doctests see both fields:
+
             >>> sample_pytorch_dataset.config.include_numeric_value = True
             >>> sample_pytorch_dataset.config.include_time_delta = True
         """
