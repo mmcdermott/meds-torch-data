@@ -948,7 +948,13 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             out["n_subject_windows"] = self._windows_per_subject[subject_id]
 
         if self.config.static_inclusion_mode == StaticInclusionMode.PREPEND:
-            static_as_JNRT = static_data.to_JNRT(self.config.batch_mode, dynamic_data.schema)
+            # Match the static JNRT keyset to whatever `load_subject_data` actually loaded
+            # from disk — `include_numeric_value=False` / `include_time_delta=False` cause
+            # the dynamic side to skip those keys via NRT 0.2's `keys=`, and `concatenate`
+            # requires exact keyset agreement on both sides.
+            static_as_JNRT = static_data.to_JNRT(
+                self.config.batch_mode, dynamic_data.schema, keys=dynamic_data.keys()
+            )
             dynamic_data = JointNestedRaggedTensorDict.concatenate([static_as_JNRT, dynamic_data])
 
         out["dynamic"] = dynamic_data
@@ -1096,7 +1102,18 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         shard, subject_idx = self.subj_locations[subject_id]
 
         dynamic_data_fp = self.config.tensorized_cohort_dir / "data" / f"{shard}.nrt"
-        subject_dynamic_data = JointNestedRaggedTensorDict(tensors_fp=dynamic_data_fp)[subject_idx, st:end]
+
+        # Only load the tensors downstream collation will actually use — `keys=` (nested_ragged_tensors
+        # >= 0.2) skips the unloaded tensors' disk reads entirely. `code` is always required; the
+        # other two are gated by the omission flags on the config.
+        load_keys = {"code"}
+        if self.config.include_numeric_value:
+            load_keys.add("numeric_value")
+        if self.config.include_time_delta:
+            load_keys.add("time_delta_days")
+        subject_dynamic_data = JointNestedRaggedTensorDict(tensors_fp=dynamic_data_fp, keys=load_keys)[
+            subject_idx, st:end
+        ]
 
         # When `static_inclusion_mode == OMIT` the static columns were not loaded from the
         # schema parquet (see issue #45 — skipping them at `pl.read_parquet(columns=...)`

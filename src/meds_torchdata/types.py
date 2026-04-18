@@ -243,12 +243,21 @@ class StaticData(NamedTuple):
     code: list[int]
     numeric_value: list[float | None]
 
-    def to_JNRT(self, batch_mode: BatchMode, schema: dict | None = None) -> JointNestedRaggedTensorDict:
+    def to_JNRT(
+        self,
+        batch_mode: BatchMode,
+        schema: dict | None = None,
+        keys: set[str] | None = None,
+    ) -> JointNestedRaggedTensorDict:
         """Converts the static data into a JointNestedRaggedTensorDict representation.
 
         Args:
             batch_mode: The batch mode to use for the conversion (either SEM or SM).
             schema: The schema to use for the conversion.
+            keys: Optional filter restricting which top-level keys (`code`, `numeric_value`,
+                `time_delta_days`) appear in the output. Used so the static JNRT keyset can
+                match a dynamic JNRT loaded with `JointNestedRaggedTensorDict(..., keys=...)`
+                before `concatenate`. When `None` (default) all keys are emitted.
 
         Returns:
             A JointNestedRaggedTensorDict representation of the static data, including the code, numeric
@@ -320,6 +329,9 @@ class StaticData(NamedTuple):
                 }
             case _:
                 raise ValueError(f"Invalid batch mode {batch_mode}!")
+
+        if keys is not None:
+            static_dict = {k: v for k, v in static_dict.items() if k in keys}
 
         return JointNestedRaggedTensorDict(static_dict, schema=schema)
 
