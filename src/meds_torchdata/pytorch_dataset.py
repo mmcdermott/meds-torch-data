@@ -1035,7 +1035,9 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             >>> std_col = (
             ...     (pl.col("values/sum_sqd")/pl.col("values/n_occurrences") - mean_col**2)**0.5
             ... ).alias("values/std")
-            >>> code_metadata.select("code", "code/vocab_index", mean_col, std_col)
+            >>> code_metadata.select(
+            ...     "code", "code/vocab_index", mean_col, std_col
+            ... ).sort("code/vocab_index")
             shape: (7, 4)
             ┌──────────────────────┬──────────────────┬─────────────┬────────────┐
             │ code                 ┆ code/vocab_index ┆ values/mean ┆ values/std │

@@ -94,7 +94,7 @@ class SubsequenceSamplingStrategy(StrEnum):
         seq_len: int,
         max_seq_len: int,
         rng: SEED_OR_RNG = None,
-    ) -> int | None:
+    ) -> int:
         """Subsample starting offset based on maximum sequence length and sampling strategy.
 
         The method is an ordinary instance method on the enum; callers typically invoke it via the
@@ -109,8 +109,11 @@ class SubsequenceSamplingStrategy(StrEnum):
                 integer, a new generator is created with that seed.
 
         Returns:
-            The (integral) start offset within the sequence based on the sampling strategy, or `None` if no
-            subsampling is required.
+            The (integral) start offset within the sequence based on the sampling strategy. Always an
+            `int`: when `seq_len <= max_seq_len` (no sub-sampling needed) every strategy returns `0`,
+            so callers can slice `data[st : st + max_seq_len]` unconditionally — the `min(seq_len, ...)`
+            clamp in `MEDSTorchDataConfig.process_dynamic_data` handles the short-sequence case. See
+            issue #71 for the history behind dropping the previous `None`-on-fit sentinel.
 
         Examples:
             >>> SubsequenceSamplingStrategy.subsample_st_offset("from_start", 10, 5)
@@ -119,8 +122,8 @@ class SubsequenceSamplingStrategy(StrEnum):
             5
             >>> SubsequenceSamplingStrategy.subsample_st_offset("random", 10, 5, rng=1)
             2
-            >>> SubsequenceSamplingStrategy.RANDOM.subsample_st_offset(10, 10) is None
-            True
+            >>> SubsequenceSamplingStrategy.RANDOM.subsample_st_offset(10, 10)
+            0
 
             `STEP_THROUGH` delegates to `TO_END`: each index entry already points at the
             "load me up to this event" endpoint, so the sampler just takes the last
@@ -129,8 +132,8 @@ class SubsequenceSamplingStrategy(StrEnum):
 
             >>> SubsequenceSamplingStrategy.STEP_THROUGH.subsample_st_offset(10, 5)
             5
-            >>> SubsequenceSamplingStrategy.STEP_THROUGH.subsample_st_offset(5, 10) is None
-            True
+            >>> SubsequenceSamplingStrategy.STEP_THROUGH.subsample_st_offset(5, 10)
+            0
 
             The random sampler must be able to place the window flush against the end of the
             sequence (i.e. sample `st = seq_len - max_seq_len`, so that the last event at index
@@ -155,10 +158,10 @@ class SubsequenceSamplingStrategy(StrEnum):
             >>> sorted(possible_st)
             [-4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
-            `BALANCED_RANDOM` returns `None` (no subsampling) when the sequence already fits:
+            `BALANCED_RANDOM` returns `0` (no subsampling) when the sequence already fits:
 
-            >>> SubsequenceSamplingStrategy.BALANCED_RANDOM.subsample_st_offset(5, 10) is None
-            True
+            >>> SubsequenceSamplingStrategy.BALANCED_RANDOM.subsample_st_offset(5, 10)
+            0
 
             >>> SubsequenceSamplingStrategy.subsample_st_offset("foo", 10, 5)
             Traceback (most recent call last):
@@ -167,7 +170,9 @@ class SubsequenceSamplingStrategy(StrEnum):
         """
 
         if seq_len <= max_seq_len:
-            return None
+            # No sub-sampling needed — caller will slice `data[0 : min(seq_len, max_seq_len)]`
+            # and get the whole sequence. Return `0` so the signature stays monomorphic.
+            return 0
 
         match self:
             case SubsequenceSamplingStrategy.RANDOM:

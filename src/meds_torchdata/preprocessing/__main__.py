@@ -6,14 +6,23 @@ from pathlib import Path
 import hydra
 from omegaconf import DictConfig
 
-from . import ETL_CFG, MAIN_CFG, RESHARD_ETL_CFG, RUNNER_CFG
+from . import ETL_CFG, MAIN_CFG, RESHARD_ETL_CFG
 
 logger = logging.getLogger(__name__)
 
 
 @hydra.main(version_base=None, config_path=str(MAIN_CFG.parent), config_name=MAIN_CFG.stem)
 def main(cfg: DictConfig):
-    """Runs the end-to-end MEDS Extraction pipeline."""
+    """Runs the end-to-end MEDS Extraction pipeline.
+
+    MEDS-Transforms 0.6.x replaced the previous Hydra-driven `~parallelize` override with a
+    config-only parallelization model: the `parallelize` block must live inside a stage runner
+    YAML or inside `additional_params.parallelize` in the pipeline config, and the `joblib`
+    launcher requires the optional `hydra-joblib-launcher` package. To keep this entrypoint
+    honest about what it can offer, we no longer consult the `N_WORKERS` env var — users who
+    want parallel execution pass their own `stage_runner_fp` (see the test suite's
+    `PARALLEL_STAGE_RUNNER_YAML` for a minimal joblib example).
+    """
 
     MEDS_dataset_dir = Path(cfg.MEDS_dataset_dir)
     output_dir = Path(cfg.output_dir)
@@ -22,33 +31,34 @@ def main(cfg: DictConfig):
 
     etl_cfg = RESHARD_ETL_CFG if do_reshard else ETL_CFG
 
-    # Then we construct the rest of the command
-    command_parts = [
-        f"INPUT_DIR={MEDS_dataset_dir.resolve()!s}",
-        f"OUTPUT_DIR={output_dir.resolve()!s}",
-        "MEDS_transform-pipeline",
-        f"--config-path={RUNNER_CFG.parent.resolve()!s}",
-        f"--config-name={RUNNER_CFG.stem}",
-        f"pipeline_config_fp={etl_cfg.resolve()!s}",
-    ]
-    if int(os.getenv("N_WORKERS", 1)) <= 1:
-        logger.info("Running in serial mode as N_WORKERS is not set.")
-        command_parts.append("~parallelize")
+    cmd = ["MEDS_transform-pipeline", str(etl_cfg.resolve())]
 
     if stage_runner_fp:
-        command_parts.append(f"stage_runner_fp={stage_runner_fp}")
+        cmd.extend(["--stage_runner_fp", str(stage_runner_fp)])
 
+    overrides: list[str] = []
     if cfg.get("do_overwrite", None) is not None:
-        command_parts.append(f"++do_overwrite={cfg.do_overwrite}")
+        overrides.append(f"do_overwrite={cfg.do_overwrite}")
 
-    full_cmd = " ".join(command_parts)
-    logger.info(f"Running command: {full_cmd}")
-    command_out = subprocess.run(full_cmd, shell=True, capture_output=True)
+    if overrides:
+        cmd.append("--overrides")
+        cmd.extend(overrides)
+
+    # `MEDS_transform-pipeline` reads `INPUT_DIR` / `OUTPUT_DIR` from the environment rather than
+    # from CLI flags, so we pass them via `env=` to avoid the `shell=True` / string-joining path
+    # that would otherwise corrupt dataset paths containing spaces or shell metacharacters.
+    env = {
+        **os.environ,
+        "INPUT_DIR": str(MEDS_dataset_dir.resolve()),
+        "OUTPUT_DIR": str(output_dir.resolve()),
+    }
+    logger.info(f"Running command: INPUT_DIR={env['INPUT_DIR']} OUTPUT_DIR={env['OUTPUT_DIR']} {cmd}")
+    command_out = subprocess.run(cmd, capture_output=True, text=True, env=env)
 
     if command_out.returncode != 0:
         logger.error(f"Command failed with return code {command_out.returncode}.")
-        logger.error(f"Command stdout:\n{command_out.stdout.decode()}")
-        logger.error(f"Command stderr:\n{command_out.stderr.decode()}")
+        logger.error(f"Command stdout:\n{command_out.stdout}")
+        logger.error(f"Command stderr:\n{command_out.stderr}")
         raise ValueError(f"Command failed with return code {command_out.returncode}.")
     else:
-        logger.debug(f"Command stdout:\n{command_out.stdout.decode()}")
+        logger.debug(f"Command stdout:\n{command_out.stdout}")
