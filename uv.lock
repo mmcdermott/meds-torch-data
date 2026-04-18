@@ -847,7 +847,7 @@ requires-dist = [
     { name = "meds", specifier = ">=0.4,<0.5" },
     { name = "meds-testing-helpers", specifier = ">=0.3,<0.4" },
     { name = "meds-transforms", specifier = ">=0.6,<0.7" },
-    { name = "nested-ragged-tensors", specifier = ">=0.1.0,<0.2" },
+    { name = "nested-ragged-tensors", specifier = ">=0.2,<0.3" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "omegaconf", specifier = ">=2.3" },
     { name = "polars", specifier = ">=1.30,<2" },
@@ -1258,15 +1258,15 @@ wheels = [
 
 [[package]]
 name = "nested-ragged-tensors"
-version = "0.1"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "safetensors" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/36/b5/6910630f2756934657401f5588d78b91afddbe3a5d0af1319866596e1bbe/nested_ragged_tensors-0.1.tar.gz", hash = "sha256:991f8da5fbabca3986b3c6b70007944116bb189ddd5cb8c3de5a3e218093e615", size = 24261159, upload-time = "2024-11-07T21:23:09.309Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0e/77/c617064470f8d9e9979d6d46478e097b4530aa4acad6b158760592f083fc/nested_ragged_tensors-0.2.0.tar.gz", hash = "sha256:656a76b7aa104dae62be331dc1bc086bc3e43fe93858ec3e9ab2edaac10dea93", size = 24356901, upload-time = "2026-04-18T11:56:52.472Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/9d/08c3dd6db4d22a84a42f8cceb6289a70d49183a2d14635ce4dafa237d07b/nested_ragged_tensors-0.1-py3-none-any.whl", hash = "sha256:c7a22a43cdc53172c7608fa64f50e21fb628cff73866702dfc27ad05e1a3c40c", size = 18270, upload-time = "2024-11-07T21:23:06.943Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/10/e7237fe2bcfa939950d05db92d2023a65b70ffb16d814de304cabf234140/nested_ragged_tensors-0.2.0-py3-none-any.whl", hash = "sha256:907f5f753b28893d0a7b6e1b06ecb5fea6ed6e4145bf4caa0938515cb5b562e8", size = 21887, upload-time = "2026-04-18T11:56:50.035Z" },
 ]
 
 [[package]]
