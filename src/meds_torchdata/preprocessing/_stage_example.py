@@ -21,7 +21,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
 import polars as pl
 from MEDS_transforms.stages.examples import StageExample
 from nested_ragged_tensors.ragged_numpy import JointNestedRaggedTensorDict
@@ -40,7 +39,7 @@ class MTDStageExample(StageExample):
     `.parquet` / `.nrt` files (the former natively, the latter via the `NRTFile` plugin
     registered in `pyproject.toml`). `check_outputs` then compares each materialized
     expected file to the stage's actual output — Polars `assert_frame_equal` for parquet,
-    per-tensor `np.array_equal(equal_nan=True)` for NRT.
+    `JointNestedRaggedTensorDict.equals(equal_nan=True)` for NRT.
     """
 
     # Redeclare as Path — `want_data` here is a yaml spec file, not a parsed MEDSDataset.
@@ -120,20 +119,9 @@ def _compare(expected_fp: Path, actual_fp: Path, rel: Path, df_check_kwargs: dic
             except AssertionError as e:
                 raise AssertionError(f"Parquet {rel} differs.\nGot:\n{got}\nWant:\n{want}") from e
         case ".nrt":
-            # Can't use `want == got` — `JointNestedRaggedTensorDict.__eq__` compares via
-            # `np.array_equal` without `equal_nan=True`, so any NaN (e.g., the leading
-            # `time_delta`) makes the comparison return False. See upstream issue:
-            # https://github.com/mmcdermott/nested_ragged_tensors/issues/63
             got = JointNestedRaggedTensorDict(tensors_fp=actual_fp)
             want = JointNestedRaggedTensorDict(tensors_fp=expected_fp)
-            assert set(got.tensors) == set(want.tensors), (
-                f"NRT {rel} tensor keys differ. Want {sorted(want.tensors)}, got {sorted(got.tensors)}."
-            )
-            for k, want_v in want.tensors.items():
-                got_v = got.tensors[k]
-                assert np.array_equal(want_v, got_v, equal_nan=True), (
-                    f"NRT {rel} tensor '{k}' differs.\nGot: {got_v}\nWant: {want_v}"
-                )
+            assert want.equals(got, equal_nan=True), f"NRT {rel} differs.\nGot:\n{got}\nWant:\n{want}"
         case _:
             raise AssertionError(
                 f"Unsupported output suffix '{expected_fp.suffix}' for {rel}. "
