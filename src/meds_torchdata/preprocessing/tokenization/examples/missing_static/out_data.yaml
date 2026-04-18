@@ -1,0 +1,32 @@
+# Expected output for `missing_static`: subject 2's static_code / static_numeric_value
+# come out as `null` (not an empty list) because the full-outer join surfaces nulls
+# for subjects absent from the static side. `load_subject_data` handles this at
+# runtime via the `item() is None → []` fallback in `pytorch_dataset.py` (#63).
+data/schemas/train/0.parquet:
+  subject_id: [1, 2]
+  static_code:
+    - [5]
+    - null
+  static_numeric_value:
+    - [1.0]
+    - null
+  start_time:
+    - 2020-01-01 00:00:00
+    - 2021-06-01 00:00:00
+  time:
+    - [2020-01-01 00:00:00, 2020-01-05 00:00:00]
+    - [2021-06-01 00:00:00, 2021-06-03 00:00:00]
+  measurements_per_event:
+    - [1, 1]
+    - [1, 1]
+data/event_seqs/train/0.parquet:
+  subject_id: [1, 2]
+  time_delta_days:
+    - [.nan, 4.0]
+    - [.nan, 2.0]
+  code:
+    - [[10], [11]]
+    - [[20], [21]]
+  numeric_value:
+    - [[0.5], [0.7]]
+    - [[5.5], [5.7]]

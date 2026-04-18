@@ -1,6 +1,8 @@
-"""Tests the full, multi-stage pre-processing pipeline.
+"""CLI-level tests for the `MTD_preprocess` entrypoint.
 
-Only checks tokenized and tensorized outputs.
+End-to-end pipeline semantics (stage chain + output validation) live in
+`test_stages.py::test_pipeline_*`. This file covers the wrapper's CLI contract only:
+help output, space-containing paths, and the missing-input error path.
 """
 
 import shutil
@@ -8,11 +10,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-import polars as pl
-
-from . import PREPROCESS_SCRIPT, assert_df_equal, check_NRT_output
-from .test_tensorization import WANT_NRTS
-from .test_tokenization import WANT_SCHEMAS
+PREPROCESS_SCRIPT = "MTD_preprocess"
 
 HELP_STR = """
 == MTD_preprocess ==
@@ -40,28 +38,6 @@ def test_preprocess_help():
     out = subprocess.run(f"{PREPROCESS_SCRIPT} --help", shell=True, check=True, capture_output=True)
     assert out.returncode == 0
     assert out.stdout.decode().strip() == HELP_STR.strip()
-
-
-def test_preprocess(tensorized_MEDS_dataset: Path):
-    cohort_dir = tensorized_MEDS_dataset
-
-    cohort_dir_contents = list(cohort_dir.rglob("*.parquet")) + list(cohort_dir.rglob("*.nrt"))
-    cohort_dir_contents_str = "\n".join(f"  - {f.relative_to(cohort_dir)}" for f in cohort_dir_contents)
-
-    for shard, want_schema in WANT_SCHEMAS.items():
-        fp = cohort_dir / f"tokenization/{shard}.parquet"
-        err_str = f"Expected output file {fp} not found. Directory contents:\n" + cohort_dir_contents_str
-
-        assert fp.exists(), err_str
-        got_schema = pl.read_parquet(fp)
-        assert_df_equal(got_schema, want_schema, check_column_order=False)
-
-    for shard, want_NRT in WANT_NRTS.items():
-        fp = cohort_dir / f"data/{shard}"
-        err_str = f"Expected output file {fp} not found. Directory contents:\n" + cohort_dir_contents_str
-
-        assert fp.exists(), err_str
-        check_NRT_output(fp, want_NRT, f"{shard} NRT differs!")
 
 
 def test_preprocess_path_with_spaces(simple_static_MEDS: Path):
@@ -94,6 +70,45 @@ def test_preprocess_path_with_spaces(simple_static_MEDS: Path):
 
         assert any(spaced_out.rglob("*.parquet")), "No parquet outputs produced."
         assert any(spaced_out.rglob("*.nrt")), "No NRT outputs produced."
+
+
+def test_preprocess_stage_runner_fp_passthrough(simple_static_MEDS: Path):
+    """Covers `MTD_preprocess`'s `stage_runner_fp=` hydra-override plumbing.
+
+    `test_stages.py::test_pipeline_parallel` invokes `MEDS_transform-pipeline` directly via
+    `pipeline_tester`, skipping our `__main__.py` wrapper. This test fills the gap by running
+    `MTD_preprocess` with a stage runner YAML that references a launcher no installed package
+    provides. If the wrapper correctly forwards `--stage_runner_fp`, the inner pipeline fails
+    while trying to resolve the launcher (and the failure surfaces the launcher name). If the
+    wrapper silently dropped `stage_runner_fp`, the pipeline would instead succeed in the
+    default serial mode — a false positive the earlier version of this test would not catch.
+    """
+
+    sentinel_launcher = "__mtd_passthrough_sentinel_launcher__"
+    with tempfile.TemporaryDirectory() as root_dir:
+        runner_fp = Path(root_dir) / "stage_runner.yaml"
+        runner_fp.write_text(f"parallelize:\n  launcher: {sentinel_launcher}\n")
+
+        cohort_dir = Path(root_dir) / "cohort"
+        command = [
+            PREPROCESS_SCRIPT,
+            f"MEDS_dataset_dir={simple_static_MEDS!s}",
+            f"output_dir={cohort_dir!s}",
+            f"stage_runner_fp={runner_fp!s}",
+        ]
+        out = subprocess.run(command, shell=False, check=False, capture_output=True, text=True)
+
+        combined = out.stdout + out.stderr
+        assert out.returncode != 0, (
+            "MTD_preprocess should fail when stage_runner_fp references a nonexistent launcher; "
+            "a successful run implies the wrapper silently dropped `stage_runner_fp`.\n"
+            f"stdout:\n{out.stdout}\nstderr:\n{out.stderr}"
+        )
+        assert sentinel_launcher in combined, (
+            "Expected failure output to mention the sentinel launcher, confirming the runner "
+            "YAML was actually loaded by the inner `MEDS_transform-pipeline` invocation.\n"
+            f"stdout:\n{out.stdout}\nstderr:\n{out.stderr}"
+        )
 
 
 def test_preprocess_error_case():
