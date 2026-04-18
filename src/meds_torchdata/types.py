@@ -306,6 +306,20 @@ class StaticData(NamedTuple):
             time_delta_days
             [nan nan nan]
 
+        `keys=` drops the unlisted top-level keys from the output — used to keep the
+        static JNRT's keyset aligned with a dynamic JNRT that was loaded via NRT's
+        `keys=` subset before `concatenate`:
+
+            >>> pprint_dense(static_data.to_JNRT(BatchMode.SM, keys={"code"}).to_dense())
+            code
+            [1 2 3]
+            >>> pprint_dense(static_data.to_JNRT(BatchMode.SM, keys={"code", "time_delta_days"}).to_dense())
+            code
+            [1 2 3]
+            .
+            time_delta_days
+            [nan nan nan]
+
         Passing an invalid batch mode will raise an error:
 
             >>> pprint_dense(static_data.to_JNRT("foobar").to_dense())
