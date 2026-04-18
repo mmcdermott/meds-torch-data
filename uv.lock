@@ -847,7 +847,7 @@ requires-dist = [
     { name = "lightning", marker = "extra == 'lightning'", specifier = "~=2.5.1" },
     { name = "meds", specifier = ">=0.4,<0.5" },
     { name = "meds-testing-helpers", specifier = ">=0.3,<0.4" },
-    { name = "meds-transforms", specifier = ">=0.6,<0.7" },
+    { name = "meds-transforms", specifier = ">=0.6.7,<0.7" },
     { name = "nested-ragged-tensors", specifier = ">=0.2,<0.3" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "omegaconf", specifier = ">=2.3" },
@@ -884,7 +884,7 @@ docs = [
 
 [[package]]
 name = "meds-transforms"
-version = "0.6.6"
+version = "0.6.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
@@ -898,9 +898,9 @@ dependencies = [
     { name = "pytest" },
     { name = "yaml-to-disk" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5f/fe/9fed40951e17a120837123b526a9097855d4a5317bccc776f534351e7c29/meds_transforms-0.6.6.tar.gz", hash = "sha256:7b8d6d69a1738baaef9d51b7afad3567d6a5fbb5d0bcd72ba8235b8cac533a38", size = 586429, upload-time = "2026-04-14T02:25:53.888Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b4/19/407efdafc8adbb8385495579934d88fdf8c5c8373fc2e76026fe0b54e26d/meds_transforms-0.6.7.tar.gz", hash = "sha256:8c957a5743d7e53b2262d3898356feb7c2ebcb3236b5b10156ef5c44c2774149", size = 589647, upload-time = "2026-04-18T14:45:25.291Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/72/48/aa55a7b098c8ed2aefd7dd175142009a030aad48000bafed8f2043af3250/meds_transforms-0.6.6-py3-none-any.whl", hash = "sha256:8e86c6ba33cb8a5647a29191f8f366e30d354363a01b3fc40c9496fa62f76882", size = 217491, upload-time = "2026-04-14T02:25:52.142Z" },
+    { url = "https://files.pythonhosted.org/packages/40/19/55d217de368c7fb643f89f7ef312092740c24c189f75ec28d7c68b0b1dbd/meds_transforms-0.6.7-py3-none-any.whl", hash = "sha256:ce4b458f9e26e31a3e1fe7000769bb7be5b3bf58c3ba0da071d639a6a4a013c0", size = 219935, upload-time = "2026-04-18T14:45:23.714Z" },
 ]
 
 [[package]]
