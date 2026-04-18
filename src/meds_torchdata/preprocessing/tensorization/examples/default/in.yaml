@@ -1,0 +1,39 @@
+# Multi-shard tensorization input: four tokenized event_seqs parquets, one per split.
+# Exercises that the stage iterates over arbitrarily-nested shard paths.
+# Values match tokenization's `multi_shard/out_data.yaml` event_seqs output so the
+# two stages chain through `pipeline_tester` if desired.
+data/event_seqs/train/0.parquet:
+  subject_id: [1, 2]
+  time_delta_days:
+    - [.nan, 10.0]
+    - [.nan, 2.0]
+  code:
+    - [[10], [12]]
+    - [[20], [22]]
+  numeric_value:
+    - [[0.5], [1.2]]
+    - [[5.5], [6.2]]
+data/event_seqs/train/1.parquet:
+  subject_id: [3]
+  time_delta_days:
+    - [.nan]
+  code:
+    - [[30]]
+  numeric_value:
+    - [[7.5]]
+data/event_seqs/tuning/0.parquet:
+  subject_id: [4]
+  time_delta_days:
+    - [.nan]
+  code:
+    - [[40]]
+  numeric_value:
+    - [[8.5]]
+data/event_seqs/held_out/0.parquet:
+  subject_id: [5]
+  time_delta_days:
+    - [.nan, 10.0]
+  code:
+    - [[50], [55]]
+  numeric_value:
+    - [[9.0], [9.9]]
