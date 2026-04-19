@@ -463,7 +463,9 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
         for subject_id, end_idx in self.index:
             effective_window = self._effective_max_seq_len_for(subject_id)
-            if effective_window <= 0:
+            if (
+                effective_window <= 0
+            ):  # pragma: no cover - defensive: requires PREPEND + max_seq_len <= len(static)
                 raise ValueError(
                     f"Effective dynamic window size for subject {subject_id} is "
                     f"{effective_window} (max_seq_len={self.config.max_seq_len} minus the "
@@ -485,7 +487,9 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                     "would produce a non-positive stride. Reduce step_through_overlap or "
                     "increase max_seq_len."
                 )
-            if stride > effective_window:
+            if (
+                stride > effective_window
+            ):  # pragma: no cover - defensive: requires per-subject stride overshoot
                 raise ValueError(
                     f"step_through stride ({stride}) exceeds the effective window width "
                     f"({effective_window}) for subject {subject_id}, which would leave gaps "
@@ -659,7 +663,9 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         shard, subject_idx = self.subj_locations[subject_id]
         schema_row = self.schema_dfs_by_shard[shard][subject_idx]
         meas_per_event_series = schema_row["measurements_per_event"].item()
-        if meas_per_event_series is None:
+        if (
+            meas_per_event_series is None
+        ):  # pragma: no cover - static-only subject: no cohort fixture produces one
             # Subject with no dynamic data — single trivial window.
             return [0], [0]
         meas_per_event = meas_per_event_series.to_list()

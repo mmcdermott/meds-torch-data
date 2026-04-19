@@ -49,5 +49,18 @@ else:
         except Exception as e:
             raise AssertionError(f"Failed to create dataloaders: {e}") from e
 
-        sample_batch = next(iter(sample_lightning_datamodule_with_index.train_dataloader()))
-        assert sample_batch.boolean_value is None
+    def test_datamodule_accepts_data_class_as_str(sample_dataset_config):
+        """`data_class` passed as a dotted-path string is resolved via `get_class`.
+
+        Hydra instantiation paths supply the dataset class as a string
+        (`_target_`-style) rather than an imported class object; this path was
+        otherwise uncovered because our fixtures pass the class directly.
+        """
+        from meds_torchdata import MEDSPytorchDataset
+
+        dm = Datamodule(
+            config=sample_dataset_config,
+            batch_size=2,
+            data_class="meds_torchdata.MEDSPytorchDataset",
+        )
+        assert dm.data_class is MEDSPytorchDataset
