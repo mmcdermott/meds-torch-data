@@ -71,6 +71,11 @@ instance/
 # Sphinx documentation
 docs/_build/
 
+# MkDocs build output and mkdocs-gen-files materialized pages
+site/
+docs/api/
+docs/stages/
+
 # PyBuilder
 .pybuilder/
 target/

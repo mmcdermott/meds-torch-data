@@ -1,0 +1,95 @@
+# Expected tokenization output for the `default` scenario.
+# Each input shard yields a matching `schemas/<shard>.parquet` and
+# `event_seqs/<shard>.parquet` under the stage's output dir.
+# (This baseline exercises multi-shard iteration across three splits — historically
+# this lived under an `examples/multi_shard/` dir and was consolidated into `default/`
+# since that coverage strictly superseded the single-shard case.)
+data/schemas/train/0.parquet:
+  subject_id: [1, 2]
+  static_code:
+    - [5]
+    - [6]
+  static_numeric_value:
+    - [1.0]
+    - [2.0]
+  start_time:
+    - 2020-01-01 00:00:00
+    - 2021-06-01 00:00:00
+  time:
+    - [2020-01-01 00:00:00, 2020-01-11 00:00:00]
+    - [2021-06-01 00:00:00, 2021-06-03 00:00:00]
+  measurements_per_event:
+    - [1, 1]
+    - [1, 1]
+data/schemas/train/1.parquet:
+  subject_id: [3]
+  static_code:
+    - [7]
+  static_numeric_value:
+    - [3.0]
+  start_time:
+    - 2019-03-15 00:00:00
+  time:
+    - [2019-03-15 00:00:00]
+  measurements_per_event:
+    - [1]
+data/schemas/tuning/0.parquet:
+  subject_id: [4]
+  static_code:
+    - [8]
+  static_numeric_value:
+    - [4.0]
+  start_time:
+    - 2022-02-02 00:00:00
+  time:
+    - [2022-02-02 00:00:00]
+  measurements_per_event:
+    - [1]
+data/schemas/held_out/0.parquet:
+  subject_id: [5]
+  static_code:
+    - [9]
+  static_numeric_value:
+    - [5.0]
+  start_time:
+    - 2018-04-04 00:00:00
+  time:
+    - [2018-04-04 00:00:00, 2018-04-14 00:00:00]
+  measurements_per_event:
+    - [1, 1]
+
+data/event_seqs/train/0.parquet:
+  subject_id: [1, 2]
+  time_delta_days:
+    - [.nan, 10.0]
+    - [.nan, 2.0]
+  code:
+    - [[10], [12]]
+    - [[20], [22]]
+  numeric_value:
+    - [[0.5], [1.2]]
+    - [[5.5], [6.2]]
+data/event_seqs/train/1.parquet:
+  subject_id: [3]
+  time_delta_days:
+    - [.nan]
+  code:
+    - [[30]]
+  numeric_value:
+    - [[7.5]]
+data/event_seqs/tuning/0.parquet:
+  subject_id: [4]
+  time_delta_days:
+    - [.nan]
+  code:
+    - [[40]]
+  numeric_value:
+    - [[8.5]]
+data/event_seqs/held_out/0.parquet:
+  subject_id: [5]
+  time_delta_days:
+    - [.nan, 10.0]
+  code:
+    - [[50], [55]]
+  numeric_value:
+    - [[9.0], [9.9]]

@@ -183,17 +183,18 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         self.subj_locations: dict[int, tuple[str, int]] = {}
 
         # Only read the columns this dataset actually needs. Parquet is columnar so this is
-        # a per-column I/O saving at subject-schema load time — most importantly, the
-        # `measurements_per_event` list column is only needed by STEP_THROUGH sampling in
-        # SM mode (where the expansion uses it to map measurement-level window ends back
-        # to event-level indices), so every other config skips it. `start_time` is emitted
-        # by preprocessing but never consumed downstream, so it's always skipped.
-        needed_schema_cols = [
-            DataSchema.subject_id_name,
-            DataSchema.time_name,
-            "static_code",
-            "static_numeric_value",
-        ]
+        # a per-column I/O saving at subject-schema load time:
+        # - `static_code` / `static_numeric_value` are only needed when
+        #   `static_inclusion_mode != OMIT` (see issue #45). OMIT-mode datasets skip them
+        #   entirely at both the parquet read and `load_subject_data` call sites.
+        # - `measurements_per_event` is only needed by STEP_THROUGH sampling in SM mode
+        #   (the expansion uses it to map measurement-level window ends back to event-level
+        #   indices), so every other config skips it.
+        # - `start_time` is emitted by preprocessing but never consumed downstream, so it's
+        #   always skipped.
+        needed_schema_cols = [DataSchema.subject_id_name, DataSchema.time_name]
+        if self.config.includes_static:
+            needed_schema_cols.extend(["static_code", "static_numeric_value"])
         needs_meas_per_event = (
             self.config.seq_sampling_strategy == SubsequenceSamplingStrategy.STEP_THROUGH
             and self.config.batch_mode == BatchMode.SM
@@ -221,10 +222,12 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                         "(`MTD_preprocess`) to produce it."
                     )
 
-            df = pl.read_parquet(schema_fp, columns=needed_schema_cols, use_pyarrow=True).with_columns(
-                pl.col("static_code").list.eval(pl.element().fill_null(0)),
-                pl.col("static_numeric_value").list.eval(pl.element().fill_null(np.nan)),
-            )
+            df = pl.read_parquet(schema_fp, columns=needed_schema_cols, use_pyarrow=True)
+            if self.config.includes_static:
+                df = df.with_columns(
+                    pl.col("static_code").list.eval(pl.element().fill_null(0)),
+                    pl.col("static_numeric_value").list.eval(pl.element().fill_null(np.nan)),
+                )
 
             self.schema_dfs_by_shard[shard] = df
             for i, subj in enumerate(df[DataSchema.subject_id_name]):
@@ -332,7 +335,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             >>> sample["dynamic"].to_dense()["code"]
             array([[ 5,  0,  0],
                    [ 1, 10, 11],
-                   [10, 11,  0]], dtype=uint8)
+                   [10, 11,  0]])
 
             Collated batches surface `n_subject_windows` as a `[batch_size]` tensor — use
             `1 / n_subject_windows` as a per-sample loss weight to undo oversampling:
@@ -377,7 +380,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             regardless of where event boundaries fall:
 
             >>> sm_pyd[1]["dynamic"].to_dense()["code"]
-            array([11, 10, 11, 10, 11], dtype=uint8)
+            array([11, 10, 11, 10, 11])
             >>> len(sm_pyd[1]["dynamic"])
             5
 
@@ -385,7 +388,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             5 measurements wide:
 
             >>> sm_pyd[2]["dynamic"].to_dense()["code"]
-            array([10, 11, 10, 11,  4], dtype=uint8)
+            array([10, 11, 10, 11,  4])
             >>> len(sm_pyd[2]["dynamic"])
             5
         """
@@ -945,7 +948,13 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             out["n_subject_windows"] = self._windows_per_subject[subject_id]
 
         if self.config.static_inclusion_mode == StaticInclusionMode.PREPEND:
-            static_as_JNRT = static_data.to_JNRT(self.config.batch_mode, dynamic_data.schema)
+            # Match the static JNRT keyset to whatever `load_subject_data` actually loaded
+            # from disk — `include_numeric_value=False` / `include_time_delta=False` cause
+            # the dynamic side to skip those keys via NRT 0.2's `keys=`, and `concatenate`
+            # requires exact keyset agreement on both sides.
+            static_as_JNRT = static_data.to_JNRT(
+                self.config.batch_mode, dynamic_data.schema, keys=dynamic_data.keys()
+            )
             dynamic_data = JointNestedRaggedTensorDict.concatenate([static_as_JNRT, dynamic_data])
 
         out["dynamic"] = dynamic_data
@@ -957,7 +966,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
     def load_subject_data(
         self, subject_id: int, st: int, end: int
-    ) -> tuple[JointNestedRaggedTensorDict, StaticData]:
+    ) -> tuple[JointNestedRaggedTensorDict, StaticData | None]:
         """Loads and returns the dynamic data slice for a given subject ID and permissible event range.
 
         Args:
@@ -968,8 +977,10 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                  read for this subject's record. If None, no limit is applied.
 
         Returns:
-            The subject's dynamic data and static data. The static data is returned as a StaticData named
-            tuple with two fields: `code` and `numeric_value`.
+            The subject's dynamic data and static data. The static data is returned as a `StaticData`
+            named tuple with two fields: `code` and `numeric_value`. When
+            ``self.config.static_inclusion_mode == StaticInclusionMode.OMIT``, static columns are not
+            loaded from disk and the static-data slot is returned as `None`.
 
         Examples:
             >>> from nested_ragged_tensors.ragged_numpy import pprint_dense
@@ -1030,7 +1041,9 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             >>> std_col = (
             ...     (pl.col("values/sum_sqd")/pl.col("values/n_occurrences") - mean_col**2)**0.5
             ... ).alias("values/std")
-            >>> code_metadata.select("code", "code/vocab_index", mean_col, std_col)
+            >>> code_metadata.select(
+            ...     "code", "code/vocab_index", mean_col, std_col
+            ... ).sort("code/vocab_index")
             shape: (7, 4)
             ┌──────────────────────┬──────────────────┬─────────────┬────────────┐
             │ code                 ┆ code/vocab_index ┆ values/mean ┆ values/std │
@@ -1075,11 +1088,41 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             [[        nan  0.          0.        ]
              [        nan -1.4474752  -0.34049404]
              [        nan  0.          0.        ]]
+
+            In `StaticInclusionMode.OMIT` the static slot is returned as `None` rather than an
+            empty `StaticData` — the static columns are never loaded from disk in that mode, so
+            there is genuinely nothing to surface:
+
+            >>> sample_pytorch_dataset.config.static_inclusion_mode = StaticInclusionMode.OMIT
+            >>> _, static_data = sample_pytorch_dataset.load_subject_data(68729, 0, 3)
+            >>> static_data is None
+            True
+            >>> sample_pytorch_dataset.config.static_inclusion_mode = StaticInclusionMode.INCLUDE
         """
         shard, subject_idx = self.subj_locations[subject_id]
 
         dynamic_data_fp = self.config.tensorized_cohort_dir / "data" / f"{shard}.nrt"
-        subject_dynamic_data = JointNestedRaggedTensorDict(tensors_fp=dynamic_data_fp)[subject_idx, st:end]
+
+        # Only load the tensors downstream collation will actually use — `keys=` (nested_ragged_tensors
+        # >= 0.2) skips the unloaded tensors' disk reads entirely. `code` is always required; the
+        # other two are gated by the omission flags on the config.
+        load_keys = {"code"}
+        if self.config.include_numeric_value:
+            load_keys.add("numeric_value")
+        if self.config.include_time_delta:
+            load_keys.add("time_delta_days")
+        subject_dynamic_data = JointNestedRaggedTensorDict(tensors_fp=dynamic_data_fp, keys=load_keys)[
+            subject_idx, st:end
+        ]
+
+        # When `static_inclusion_mode == OMIT` the static columns were not loaded from the
+        # schema parquet (see issue #45 — skipping them at `pl.read_parquet(columns=...)`
+        # time saves per-subject I/O on datasets that never consume static data). Return
+        # `None` for the static slot; callers that care about static data must already
+        # branch on `static_inclusion_mode` before touching it, and `_seeded_getitem`'s OMIT
+        # branch never reads the static slot.
+        if not self.config.includes_static:
+            return subject_dynamic_data, None
 
         subj_schema = self.schema_dfs_by_shard[shard][subject_idx]
         # `.item()` returns the polars list for a given row. When the dataset has no static
@@ -1536,6 +1579,56 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             │ │ │ │   [False,  True,  True],
             │ │ │ │   [False,  True,  True],
             │ │ │ │   [False,  True,  True]]]
+
+            Omission-flag coverage: every `(include_numeric_value, include_time_delta)`
+            combination, in the trickiest structural context (SM + PREPEND). Keeping the
+            four cases in one snippet so the setup state is explicit and not borrowed from
+            earlier doctests.
+
+            Baseline — both flags on:
+
+            >>> sample_pytorch_dataset.config.batch_mode = "SM"
+            >>> sample_pytorch_dataset.config.padding_side = "right"
+            >>> sample_pytorch_dataset.config.static_inclusion_mode = StaticInclusionMode.PREPEND
+            >>> sample_pytorch_dataset.config.seq_sampling_strategy = SubsequenceSamplingStrategy.TO_END
+            >>> sample_pytorch_dataset.config.include_numeric_value = True
+            >>> sample_pytorch_dataset.config.include_time_delta = True
+            >>> raw_batch = [sample_pytorch_dataset[2], sample_pytorch_dataset[3]]
+            >>> batch = sample_pytorch_dataset.collate(raw_batch)
+            >>> (batch.numeric_value is None, batch.numeric_value_mask is None, batch.time_delta_days is None)
+            (False, False, False)
+
+            `include_numeric_value=False` — numeric_value *and* its mask vanish:
+
+            >>> sample_pytorch_dataset.config.include_numeric_value = False
+            >>> batch = sample_pytorch_dataset.collate(raw_batch)
+            >>> (batch.numeric_value is None, batch.numeric_value_mask is None, batch.time_delta_days is None)
+            (True, True, False)
+
+            `include_time_delta=False` — the SM+PREPEND regression case. The static-mask
+            sizing used to read its sequence-length axis from `time_delta_days`, which
+            silently disappears when that flag goes off; the current implementation reads
+            the axis from `code` (always present), so the mask still has the right shape.
+
+            >>> sample_pytorch_dataset.config.include_numeric_value = True
+            >>> sample_pytorch_dataset.config.include_time_delta = False
+            >>> batch = sample_pytorch_dataset.collate(raw_batch)
+            >>> (batch.numeric_value is None, batch.time_delta_days is None,
+            ...  batch.static_mask.shape == batch.code.shape)
+            (False, True, True)
+
+            Both off together:
+
+            >>> sample_pytorch_dataset.config.include_numeric_value = False
+            >>> batch = sample_pytorch_dataset.collate(raw_batch)
+            >>> (batch.numeric_value is None, batch.time_delta_days is None,
+            ...  batch.static_mask.shape == batch.code.shape)
+            (True, True, True)
+
+            Restore defaults so later doctests see both fields:
+
+            >>> sample_pytorch_dataset.config.include_numeric_value = True
+            >>> sample_pytorch_dataset.config.include_time_delta = True
         """
 
         data = JointNestedRaggedTensorDict.vstack([item["dynamic"] for item in batch])
@@ -1543,12 +1636,17 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         tensorized = {k: torch.as_tensor(v) for k, v in data.items()}
 
         out = {}
-        out["time_delta_days"] = torch.nan_to_num(tensorized.pop("time_delta_days"), nan=0).float()
         out["code"] = tensorized.pop("code").long()
         if self.config.batch_mode == BatchMode.SEM:
             out["event_mask"] = tensorized.pop("dim1/mask")
-        out["numeric_value_mask"] = ~torch.isnan(tensorized["numeric_value"])
-        out["numeric_value"] = torch.nan_to_num(tensorized.pop("numeric_value"), nan=0).float()
+        # Dynamic-field omission (issues #46 and #47): when the user opts out via config,
+        # drop the corresponding tensors from the batch entirely. Gating these with the
+        # same conditional keeps the hot path branch-free for the default (include both).
+        if self.config.include_time_delta:
+            out["time_delta_days"] = torch.nan_to_num(tensorized.pop("time_delta_days"), nan=0).float()
+        if self.config.include_numeric_value:
+            out["numeric_value_mask"] = ~torch.isnan(tensorized["numeric_value"])
+            out["numeric_value"] = torch.nan_to_num(tensorized.pop("numeric_value"), nan=0).float()
 
         match self.config.static_inclusion_mode:
             case StaticInclusionMode.OMIT:
@@ -1574,13 +1672,15 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                         static_mask = torch.zeros_like(out["event_mask"])
                         static_mask[:, 0] = True
                     case BatchMode.SM:
-                        static_mask = torch.arange(out["time_delta_days"].shape[1]).unsqueeze(
-                            0
-                        ) < torch.as_tensor(n_static_seq_els).unsqueeze(1)
-                        static_mask = static_mask.to(
-                            device=out["numeric_value_mask"].device,
-                            dtype=out["numeric_value_mask"].dtype,
-                        )
+                        # Use `out["code"]` for the shape / dtype reference rather than one
+                        # of the optional numeric/time fields, so that static_mask still
+                        # works when `include_numeric_value=False` or
+                        # `include_time_delta=False` drops those from the batch.
+                        seq_len_axis = out["code"].shape[1]
+                        static_mask = torch.arange(seq_len_axis).unsqueeze(0) < torch.as_tensor(
+                            n_static_seq_els
+                        ).unsqueeze(1)
+                        static_mask = static_mask.to(device=out["code"].device, dtype=torch.bool)
 
                 out["static_mask"] = static_mask
 

@@ -18,6 +18,8 @@ from MEDS_transforms.mapreduce.shard_iteration import shard_iterator
 from MEDS_transforms.stages import Stage
 from omegaconf import DictConfig, OmegaConf
 
+from .._stage_example import MTDStageExample
+
 SECONDS_PER_MINUTE = 60.0
 SECONDS_PER_HOUR = SECONDS_PER_MINUTE * 60.0
 SECONDS_PER_DAY = SECONDS_PER_HOUR * 24.0
@@ -184,6 +186,35 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
         │ 2          ┆ 2020-01-01 00:00:00 ┆ 1                      │
         │ 2          ┆ 2021-01-02 00:00:00 ┆ 2                      │
         └────────────┴─────────────────────┴────────────────────────┘
+
+        Source order is preserved across the full-outer join, not re-sorted by `subject_id`.
+        The input below has subject IDs `[7, 3, 5, 2, 7, 5]` — non-monotonic in either direction,
+        with duplicate subjects that differ in whether they carry a static row — and the output
+        preserves the first-occurrence order `[7, 3, 5, 2]`. Static-only subjects (here `7` and
+        `5`) carry non-null `static_code`; dynamic-only subjects (`3` and `2`) carry `null`.
+        (Regression test: polars 1.39+ stopped preserving pre-join ordering for `how="full"`.)
+
+        >>> df = pl.DataFrame({
+        ...     "subject_id": [7, 3, 5, 2, 7, 5],
+        ...     "time": [
+        ...         None, datetime(2021, 1, 1), None, datetime(2021, 2, 1),
+        ...         datetime(2021, 3, 1), datetime(2021, 4, 1),
+        ...     ],
+        ...     "code": [700, 300, 500, 200, 701, 501],
+        ...     "numeric_value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        ... }).lazy()
+        >>> extract_statics_and_schema(df).collect().select("subject_id", "static_code")
+        shape: (4, 2)
+        ┌────────────┬─────────────┐
+        │ subject_id ┆ static_code │
+        │ ---        ┆ ---         │
+        │ i64        ┆ list[i64]   │
+        ╞════════════╪═════════════╡
+        │ 7          ┆ [700]       │
+        │ 3          ┆ null        │
+        │ 5          ┆ [500]       │
+        │ 2          ┆ null        │
+        └────────────┴─────────────┘
     """
 
     static, dynamic = split_static_and_dynamic(df)
@@ -209,7 +240,17 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
         )
     )
 
-    return static_by_subject.join(schema_by_subject, on="subject_id", how="full", coalesce=True)
+    # polars 1.39+ no longer preserves pre-join row ordering for `how="full"`, so the source-order
+    # guarantee in the docstring can't rely on the `maintain_order=True` group_bys alone. Attach an
+    # explicit first-occurrence-in-source index and sort by it after the join.
+    subject_order = df.select("subject_id").unique(maintain_order=True).with_row_index("_subject_order")
+
+    return (
+        static_by_subject.join(schema_by_subject, on="subject_id", how="full", coalesce=True)
+        .join(subject_order, on="subject_id", how="left")
+        .sort("_subject_order")
+        .drop("_subject_order")
+    )
 
 
 def extract_seq_of_subject_events(df: pl.LazyFrame) -> pl.LazyFrame:
@@ -265,7 +306,7 @@ def extract_seq_of_subject_events(df: pl.LazyFrame) -> pl.LazyFrame:
     )
 
 
-@Stage.register(is_metadata=False)
+@Stage.register(is_metadata=False, example_class=MTDStageExample)
 def main(cfg: DictConfig):
     """Tokenizes the dataset in accordance with the aggregated code metadata.
 

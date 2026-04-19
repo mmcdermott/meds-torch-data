@@ -465,7 +465,7 @@ mapped to integers by looking at the output code metadata of that step:
 
 ```python
 >>> code_metadata = pl.read_parquet(tensorized_MEDS_dataset.joinpath("metadata/codes.parquet"))
->>> code_metadata.select("code", "code/vocab_index")
+>>> code_metadata.select("code", "code/vocab_index").sort("code/vocab_index")
 shape: (11, 2)
 ┌───────────────────────┬──────────────────┐
 │ code                  ┆ code/vocab_index │
