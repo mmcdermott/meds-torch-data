@@ -1,4 +1,5 @@
-# Expected NRTs for the `multi_shard` scenario — one per input shard.
+# Expected NRTs for the `default` scenario — one per input shard.
+# (Multi-shard baseline — historically under `examples/multi_shard/`, consolidated here.)
 data/train/0.nrt:
   time_delta_days:
     - [.nan, 10.0]
