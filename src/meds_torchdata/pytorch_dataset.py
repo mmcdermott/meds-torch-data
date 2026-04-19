@@ -198,8 +198,10 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
         # `join_asof` with `by` behaves like a left join (non-matching subjects get null
         # on the right). We want inner-join semantics — labels for subjects absent from
-        # `schema_df` are dropped entirely — so semi-join the labels against the subjects
-        # that have events first. Keeps the whole thing lazy.
+        # `schema_df` are dropped entirely — so semi-join the labels against the set of
+        # subjects present in `schema_df` first. (Subjects whose `time` list is empty are
+        # still "present" and are kept here; their labels end up with `end_idx=0` via the
+        # `join_asof` null-fill below.) Keeps the whole thing lazy.
         return (
             label_df.lazy()
             .with_row_index("_row")
