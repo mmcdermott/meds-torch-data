@@ -76,8 +76,10 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
     def get_task_seq_bounds_and_labels(cls, label_df: pl.DataFrame, schema_df: pl.DataFrame) -> pl.DataFrame:
         """Returns the event-level allowed input sequence boundaries and labels for each task sample.
 
-        This function is guaranteed to output an index of the same order and length as `label_df`. Subjects
-        not present in `schema_df` will be included in the output, with null labels and indices.
+        The output preserves the input-order of `label_df` for rows that survive. Rows whose
+        `subject_id` is absent from `schema_df` are **dropped** (inner-join semantics); this
+        matches the long-standing behavior of the function and is relied on by downstream
+        callers that pre-filter labels to a shard's subject set.
 
         Args:
             label_df: The DataFrame containing the task labels, in the MEDS Label DF schema.
@@ -177,26 +179,31 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         pt = LabelSchema.prediction_time_name
         time_col = DataSchema.time_name
 
+        # Sort BEFORE computing the per-subject index so `_event_idx` matches the row
+        # ordering `join_asof` actually walks — otherwise an unsorted per-subject time
+        # list would produce a pre-sort index attached to post-sort rows and drift the
+        # label-to-event mapping. (MEDS schema_df.time is usually pre-sorted by upstream
+        # tokenization, but relying on that is fragile.)
         events_flat = (
             schema_df.lazy()
             .select(sid, time_col)
             .explode(time_col)
-            .with_columns(pl.int_range(pl.len()).over(sid).alias("_event_idx"))
             .sort(sid, time_col)
+            .with_columns(pl.int_range(pl.len()).over(sid).alias("_event_idx"))
         )
-        # `join_asof` with `by` behaves like a left join (non-matching subjects get null
-        # on the right). We want inner-join semantics — labels for subjects absent from
-        # `schema_df` are dropped entirely — so pre-filter the labels.
-        subj_with_events = schema_df.select(sid).unique().to_series().implode()
 
         out_cols = [sid, cls.END_IDX, pt]
         if cls.LABEL_COL in label_df.collect_schema().names():
             out_cols.append(cls.LABEL_COL)
 
+        # `join_asof` with `by` behaves like a left join (non-matching subjects get null
+        # on the right). We want inner-join semantics — labels for subjects absent from
+        # `schema_df` are dropped entirely — so semi-join the labels against the subjects
+        # that have events first. Keeps the whole thing lazy.
         return (
             label_df.lazy()
             .with_row_index("_row")
-            .filter(pl.col(sid).is_in(subj_with_events))
+            .join(schema_df.lazy().select(sid).unique(), on=sid, how="semi")
             .sort(sid, pt)
             .join_asof(
                 events_flat,
