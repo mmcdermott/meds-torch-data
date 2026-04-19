@@ -125,11 +125,12 @@ def test_preprocess_end_to_end(simple_static_MEDS: Path):
     `test_stages.py::test_pipeline_*` validates golden outputs but invokes
     `MEDS_transform-pipeline` directly, bypassing `MTD_preprocess.__main__`. This test
     closes that gap: it runs the real CLI entrypoint and checks that the produced
-    `data/schemas/*.parquet`, `data/event_seqs/*.parquet`, and `data/*.nrt` outputs exist,
-    are readable, and carry the expected top-level columns / tensor keys. It doesn't
-    pin exact values (the pipeline tests already do that more rigorously); the point is
-    to catch wrapper-side regressions — config synthesis, subprocess plumbing, config
-    path resolution — that the golden pipeline tests would miss.
+    `tokenization/schemas/*.parquet`, `tokenization/event_seqs/*.parquet`, and
+    `data/*.nrt` outputs exist, are readable, and carry the expected top-level columns /
+    tensor keys. It doesn't pin exact values (the pipeline tests already do that more
+    rigorously); the point is to catch wrapper-side regressions — config synthesis,
+    subprocess plumbing, config path resolution — that the golden pipeline tests would
+    miss.
     """
 
     with tempfile.TemporaryDirectory() as root_dir:
