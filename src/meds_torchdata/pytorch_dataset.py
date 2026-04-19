@@ -146,29 +146,75 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             │ 3          ┆ 1               ┆ 2020-01-02 00:00:00 │
             │ 3          ┆ 1               ┆ 2020-01-03 00:00:00 │
             └────────────┴─────────────────┴─────────────────────┘
+
+            Prediction times at or before a subject's first event collapse to `end_idx = 0`
+            — there are no events in the allowed input window.
+
+            >>> early_labels = pl.DataFrame({
+            ...     "subject_id": [1, 3],
+            ...     "prediction_time": [datetime(2019, 1, 1), datetime(2019, 1, 1)],
+            ...     "boolean_value": [True, False],
+            ... })
+            >>> MEDSPytorchDataset.get_task_seq_bounds_and_labels(early_labels, schema_df)
+            shape: (2, 4)
+            ┌────────────┬─────────────────┬─────────────────────┬───────────────┐
+            │ subject_id ┆ end_event_index ┆ prediction_time     ┆ boolean_value │
+            │ ---        ┆ ---             ┆ ---                 ┆ ---           │
+            │ i64        ┆ u32             ┆ datetime[μs]        ┆ bool          │
+            ╞════════════╪═════════════════╪═════════════════════╪═══════════════╡
+            │ 1          ┆ 0               ┆ 2019-01-01 00:00:00 ┆ true          │
+            │ 3          ┆ 0               ┆ 2019-01-01 00:00:00 ┆ false         │
+            └────────────┴─────────────────┴─────────────────────┴───────────────┘
         """
 
-        end_idx_expr = (
-            pl.col(DataSchema.time_name)
-            .search_sorted(pl.col(LabelSchema.prediction_time_name), side="right")
-            .last()
-            .alias(cls.END_IDX)
+        # Flatten events once (O(total_events), not O(labels * events)) and attach a
+        # per-subject event index. A prior implementation exploded label_df against
+        # schema_df directly, which materialized an intermediate of size
+        # `sum_subject (labels_for_subject * events_for_subject)` — catastrophic on skewed
+        # cohorts where a few subjects carry most of the labels *and* most of the events,
+        # and on large enough cohorts would overflow polars' default u32 row index. See #92.
+        sid = DataSchema.subject_id_name
+        pt = LabelSchema.prediction_time_name
+        time_col = DataSchema.time_name
+
+        events_flat = (
+            schema_df.lazy()
+            .select(sid, time_col)
+            .explode(time_col)
+            .with_columns(pl.int_range(pl.len()).over(sid).alias("_event_idx"))
+            .sort(sid, time_col)
         )
+        # `join_asof` with `by` behaves like a left join (non-matching subjects get null
+        # on the right). We want inner-join semantics — labels for subjects absent from
+        # `schema_df` are dropped entirely — so pre-filter the labels.
+        subj_with_events = schema_df.select(sid).unique().to_series().implode()
 
-        group_cols = ["_row", DataSchema.subject_id_name, LabelSchema.prediction_time_name]
-        out_cols = [DataSchema.subject_id_name, cls.END_IDX, LabelSchema.prediction_time_name]
-
+        out_cols = [sid, cls.END_IDX, pt]
         if cls.LABEL_COL in label_df.collect_schema().names():
-            group_cols.append(cls.LABEL_COL)
             out_cols.append(cls.LABEL_COL)
 
         return (
-            label_df.join(schema_df, on=DataSchema.subject_id_name, how="inner", maintain_order="left")
+            label_df.lazy()
             .with_row_index("_row")
-            .explode(DataSchema.time_name)
-            .group_by(group_cols, maintain_order=True)
-            .agg(end_idx_expr)
+            .filter(pl.col(sid).is_in(subj_with_events))
+            .sort(sid, pt)
+            .join_asof(
+                events_flat,
+                left_on=pt,
+                right_on=time_col,
+                by=sid,
+                strategy="backward",
+            )
+            .with_columns(
+                # `_event_idx` is the 0-based position of the latest event with
+                # `time <= prediction_time`; `end_event_index` is the count of such events,
+                # so add 1. `join_asof` returns null when no event precedes the label's
+                # prediction_time, which maps to `end_event_index = 0`.
+                (pl.col("_event_idx") + 1).fill_null(0).cast(pl.UInt32).alias(cls.END_IDX)
+            )
+            .sort("_row")
             .select(out_cols)
+            .collect()
         )
 
     def __init__(self, cfg: MEDSTorchDataConfig, split: str):
