@@ -149,8 +149,10 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             │ 3          ┆ 1               ┆ 2020-01-03 00:00:00 │
             └────────────┴─────────────────┴─────────────────────┘
 
-            Prediction times at or before a subject's first event collapse to `end_idx = 0`
-            — there are no events in the allowed input window.
+            Prediction times strictly before a subject's first event collapse to `end_idx = 0`
+            — there are no events in the allowed input window. (A prediction time *equal* to
+            the first event's time includes that event and yields `end_idx = 1`, since the
+            count is over events with `time <= prediction_time`.)
 
             >>> early_labels = pl.DataFrame({
             ...     "subject_id": [1, 3],
