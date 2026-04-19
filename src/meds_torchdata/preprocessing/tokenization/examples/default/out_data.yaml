@@ -1,6 +1,9 @@
-# Expected tokenization output for the `multi_shard` scenario.
+# Expected tokenization output for the `default` scenario.
 # Each input shard yields a matching `schemas/<shard>.parquet` and
 # `event_seqs/<shard>.parquet` under the stage's output dir.
+# (This baseline exercises multi-shard iteration across three splits — historically
+# this lived under an `examples/multi_shard/` dir and was consolidated into `default/`
+# since that coverage strictly superseded the single-shard case.)
 data/schemas/train/0.parquet:
   subject_id: [1, 2]
   static_code:
