@@ -233,11 +233,9 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
     def __init__(self, cfg: MEDSTorchDataConfig, split: str):
         super().__init__()
 
-        # Lock the cfg against post-handoff mutation — see `MEDSTorchDataConfig.__setattr__`
-        # for the full rationale. `object.__setattr__` bypasses our own lock hook, which is
-        # the only way to set the sentinel itself. Idempotent: reusing the same cfg across
-        # multiple datasets just re-asserts the same flag.
-        object.__setattr__(cfg, "_handed_off_to_dataset", True)
+        # Lock the cfg against further mutation while it's attached to this dataset — see
+        # `MEDSTorchDataConfig.lock()` / `unlock()` for the full contract and escape hatch.
+        cfg.lock()
 
         self.config: MEDSTorchDataConfig = cfg
         self.split: str = split
@@ -1178,9 +1176,9 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
             In `StaticInclusionMode.OMIT` the static slot is returned as `None` rather than an
             empty `StaticData` — the static columns are never loaded from disk in that mode, so
-            there is genuinely nothing to surface. `MEDSTorchDataConfig` is frozen, so swap in
-            a modified config by constructing a fresh dataset (`dataclasses.replace` is the
-            idiomatic Python way to derive a new config with overrides):
+            there is genuinely nothing to surface. `sample_pytorch_dataset.config` is locked
+            (see `MEDSTorchDataConfig.lock()`), so swap in a modified config by deriving a new
+            one with `dataclasses.replace` and constructing a fresh dataset:
 
             >>> import dataclasses
             >>> omit_cfg = dataclasses.replace(

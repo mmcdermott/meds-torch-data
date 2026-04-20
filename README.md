@@ -230,11 +230,13 @@ File path parameters include:
 
 > [!NOTE]
 > A `MEDSTorchDataConfig` is freely mutable until you hand it to a `MEDSPytorchDataset`;
-> after that, it's locked against further mutation. This catches the silent-failure case
-> where a post-handoff `cfg.field = value` would fail to propagate into a live dataset (or
-> into worker processes under `persistent_workers=True`, the default from `Datamodule`
-> when `num_workers > 0`). To derive a modified config, use `dataclasses.replace(cfg, field=value)` and construct a fresh `MEDSPytorchDataset` around it — the error message
-> points at the same idiom.
+> at that point the dataset calls `cfg.lock()` on it, and further `cfg.field = value`
+> mutations raise `RuntimeError` with a pointer to the fix. This catches the silent-failure
+> case where a post-handoff mutation would fail to propagate into the dataset (or into
+> worker processes under `persistent_workers=True`, the default for `num_workers > 0` via
+> `Datamodule`). To derive a modified config, use `dataclasses.replace(cfg, field=value)`
+> and construct a fresh `MEDSPytorchDataset` around it; `cfg.unlock()` is available as a
+> loudly-warned escape hatch for users who accept that the mutation will not propagate.
 
 It also provides a convenient property to get the vocab size for the dataset, given by the vocab indices in
 the tensorized metadata. Let's start by building a configuration object for this data and inspect some of its
@@ -551,8 +553,9 @@ This example shows what the output looks like if we set the static data inclusio
 we set it to `"prepend"` instead? To show this in a stable manner, we'll also use the seeded version of the
 get item function, `_seeded_getitem`:
 
-`MEDSTorchDataConfig` is frozen after construction; `dataclasses.replace` builds a new
-config with the override and we rebuild the dataset around it.
+`pyd.config` is locked (`MEDSPytorchDataset` calls `cfg.lock()` on handoff);
+`dataclasses.replace` builds a new config with the override and we rebuild the
+dataset around it.
 
 ```python
 >>> pyd = MEDSPytorchDataset(
