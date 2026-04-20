@@ -60,7 +60,9 @@ class MTDStageExample(StageExample):
         raise a generic `AttributeError`.
 
         Examples:
-            >>> from yaml_to_disk import yaml_disk
+            `yaml_disk` is auto-registered in the doctest namespace by
+            ``yaml_to_disk.pytest_plugin``, so the doctest can use it without importing.
+
             >>> with yaml_disk({
             ...     "out_data.yaml": {"data/x.parquet": {"a": [1, 2]}},
             ...     "cfg.yaml": ["not", "a", "mapping"],

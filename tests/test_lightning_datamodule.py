@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import pytest
 
 pytestmark = pytest.mark.lightning
@@ -7,7 +11,13 @@ pytestmark = pytest.mark.lightning
 lightning = pytest.importorskip("lightning")
 LightningDataModule = lightning.LightningDataModule
 
-from meds_torchdata.extensions import Datamodule  # noqa: E402
+if TYPE_CHECKING:
+    # `Datamodule` is only used as a type annotation below; with
+    # `from __future__ import annotations` those become strings at runtime, so a
+    # TYPE_CHECKING-only import avoids the `E402` noqa we'd otherwise need (the import
+    # has to come after `pytest.importorskip` so the skip fires before the extension is
+    # touched) and keeps the module import-order clean.
+    from meds_torchdata.extensions import Datamodule
 
 
 def test_lightning_datamodule(sample_lightning_datamodule: Datamodule):
