@@ -580,6 +580,18 @@ class MEDSTorchDataConfig:
         Users who explicitly want the escape hatch get it; they get a loud pointer at the
         idiomatic alternative (`dataclasses.replace` + fresh `MEDSPytorchDataset`) too.
 
+        **Which fields can be mutated safely after unlock?** None of them in a
+        `num_workers > 0` DataLoader — workers pickle their own snapshot at spawn and
+        never see main-process mutations. In a **single-process** setting (`num_workers=0`,
+        direct `dataset[i]` access), the fields read fresh per hot-path call — and thus
+        safe to flip — are `padding_side`, `include_numeric_value`, `include_time_delta`,
+        `include_subject_window_counts_in_batch`, and `max_seq_len` when
+        `seq_sampling_strategy != STEP_THROUGH`. Every other field (sampling strategy,
+        batch mode, static mode, task labels dir, step-through params, window-last-observed,
+        tensorized cohort dir) is baked into dataset init state and flipping it
+        post-handoff leaves the dataset in an inconsistent state. For those, use
+        `dataclasses.replace(cfg, field=value)` + construct a fresh dataset instead.
+
         Examples:
             >>> import warnings
             >>> cfg = MEDSTorchDataConfig(tensorized_cohort_dir=tensorized_MEDS_dataset, max_seq_len=5)
