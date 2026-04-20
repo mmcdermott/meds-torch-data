@@ -316,6 +316,22 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         if self.config.seq_sampling_strategy == SubsequenceSamplingStrategy.STEP_THROUGH:
             self._expand_index_for_step_through()
 
+        # Per-shard JNRT handle cache — avoids rebuilding the handle object on every
+        # `__getitem__`. Keyed by `(shard, frozenset(load_keys))` so a runtime flip of
+        # `config.include_numeric_value` / `include_time_delta` naturally invalidates.
+        # Dropped on pickle (see `__getstate__`) so `DataLoader(num_workers>0)` workers
+        # rebuild their own cache rather than trying to serialize a safetensors handle
+        # that doesn't round-trip through pickle.
+        self._jnrt_by_shard: dict[tuple[str, frozenset[str]], JointNestedRaggedTensorDict] = {}
+
+    def __getstate__(self) -> dict:
+        state = self.__dict__.copy()
+        state["_jnrt_by_shard"] = {}
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+
     def _expand_index_for_step_through(self) -> None:
         """Expand `self.index` so that STEP_THROUGH sampling produces one entry per window.
 
@@ -1158,10 +1174,35 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             >>> static_data is None
             True
             >>> sample_pytorch_dataset.config.static_inclusion_mode = StaticInclusionMode.INCLUDE
+
+            The JNRT handle is cached per `(shard, load_keys)` on the dataset instance, so
+            repeated calls that hit the same shard reuse one handle rather than rebuilding
+            the safetensors wrapper each time:
+
+            >>> cfg = MEDSTorchDataConfig(tensorized_cohort_dir=tensorized_MEDS_dataset, max_seq_len=5)
+            >>> fresh = MEDSPytorchDataset(cfg, split="train")
+            >>> fresh._jnrt_by_shard
+            {}
+            >>> _ = fresh.load_subject_data(239684, 0, 3)
+            >>> len(fresh._jnrt_by_shard)
+            1
+            >>> _ = fresh.load_subject_data(239684, 0, 3)  # same shard, cache reused
+            >>> len(fresh._jnrt_by_shard)
+            1
+
+            Pickling the dataset (as `DataLoader(num_workers>0)` does when spawning workers)
+            drops the cache so each worker rebuilds its own handles — safetensors file
+            handles don't round-trip cleanly through pickle and would break otherwise:
+
+            >>> import pickle
+            >>> roundtripped = pickle.loads(pickle.dumps(fresh))
+            >>> roundtripped._jnrt_by_shard
+            {}
+            >>> _ = roundtripped.load_subject_data(239684, 0, 3)
+            >>> len(roundtripped._jnrt_by_shard)
+            1
         """
         shard, subject_idx = self.subj_locations[subject_id]
-
-        dynamic_data_fp = self.config.tensorized_cohort_dir / "data" / f"{shard}.nrt"
 
         # Only load the tensors downstream collation will actually use — `keys=` (nested_ragged_tensors
         # >= 0.2) skips the unloaded tensors' disk reads entirely. `code` is always required; the
@@ -1171,9 +1212,13 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             load_keys.add("numeric_value")
         if self.config.include_time_delta:
             load_keys.add("time_delta_days")
-        subject_dynamic_data = JointNestedRaggedTensorDict(tensors_fp=dynamic_data_fp, keys=load_keys)[
-            subject_idx, st:end
-        ]
+        cache_key = (shard, frozenset(load_keys))
+        jnrt = self._jnrt_by_shard.get(cache_key)
+        if jnrt is None:
+            dynamic_data_fp = self.config.tensorized_cohort_dir / "data" / f"{shard}.nrt"
+            jnrt = JointNestedRaggedTensorDict(tensors_fp=dynamic_data_fp, keys=load_keys)
+            self._jnrt_by_shard[cache_key] = jnrt
+        subject_dynamic_data = jnrt[subject_idx, st:end]
 
         # When `static_inclusion_mode == OMIT` the static columns were not loaded from the
         # schema parquet (see issue #45 — skipping them at `pl.read_parquet(columns=...)`
