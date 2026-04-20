@@ -106,8 +106,13 @@ class Datamodule(L.LightningDataModule, Generic[DatasetT]):
         MEDSTorchBatch(code=tensor([[ 5,  2, 10, 11, 10, 11, 10, 11,  4]]), ..., n_subject_windows=None)
 
     `prefetch_factor` is a pass-through — PyTorch's default of 2 is fine for most users, but
-    slow storage can benefit from raising it. Only takes effect when `num_workers > 0`.
+    slow storage can benefit from raising it. Only takes effect when `num_workers > 0`;
+    passed-through values are dropped otherwise (PyTorch rejects `prefetch_factor` without
+    active workers).
 
+        >>> D = Datamodule(config=sample_dataset_config, batch_size=1, prefetch_factor=4)
+        >>> D.shared_dataloader_kwargs
+        {'batch_size': 1}
         >>> D = Datamodule(
         ...     config=sample_dataset_config, batch_size=1, num_workers=2, prefetch_factor=4,
         ... )
@@ -188,18 +193,22 @@ class Datamodule(L.LightningDataModule, Generic[DatasetT]):
     @property
     def shared_dataloader_kwargs(self) -> dict:
         out = {"batch_size": self.batch_size}
-        for param in ("num_workers", "pin_memory", "prefetch_factor"):
+        for param in ("num_workers", "pin_memory"):
             if getattr(self, param) is not None:
                 out[param] = getattr(self, param)
+        workers_active = self.num_workers is not None and self.num_workers > 0
+        # `prefetch_factor` is meaningless without workers (PyTorch errors if passed with
+        # `num_workers=0`). Silently drop rather than forwarding an invalid combination.
+        if self.prefetch_factor is not None and workers_active:
+            out["prefetch_factor"] = self.prefetch_factor
         # `persistent_workers` defaults to `True` whenever workers are active. Saves the
         # worker-spawn + `MEDSPytorchDataset.__init__` cost (schema reads, index build) per
         # epoch. Cost is purely memory retention across epochs, which for MTD is already
-        # bounded by the per-worker `schema_dfs_by_shard` copy. PyTorch errors on
-        # `persistent_workers=True` when `num_workers=0`, so only auto-enable when workers
-        # are active; an explicit user value always wins.
+        # bounded by the per-worker `schema_dfs_by_shard` copy. An explicit user value
+        # wins; PyTorch raises a clear error for the invalid `True + num_workers=0` combo.
         if self.persistent_workers is not None:
             out["persistent_workers"] = self.persistent_workers
-        elif self.num_workers is not None and self.num_workers > 0:
+        elif workers_active:
             out["persistent_workers"] = True
         return out
 
