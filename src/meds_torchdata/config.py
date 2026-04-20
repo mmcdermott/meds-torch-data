@@ -577,6 +577,19 @@ class MEDSTorchDataConfig:
             Traceback (most recent call last):
                 ...
             RuntimeError: Cannot mutate `max_seq_len` on a locked MEDSTorchDataConfig...
+
+            If `MEDSPytorchDataset.__init__` raises partway through (e.g., the caller asks
+            for a split that has no schema files), the lock is not applied — the caller is
+            free to fix up the cfg and retry without `unlock()`-ing first:
+
+            >>> cfg = MEDSTorchDataConfig(tensorized_cohort_dir=tensorized_MEDS_dataset, max_seq_len=5)
+            >>> try:
+            ...     MEDSPytorchDataset(cfg, split="nonexistent_split")
+            ... except FileNotFoundError:
+            ...     pass
+            >>> cfg.max_seq_len = 42  # no error, cfg is still mutable
+            >>> cfg.max_seq_len
+            42
         """
         object.__setattr__(self, "_locked", True)
 

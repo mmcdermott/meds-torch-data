@@ -233,10 +233,6 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
     def __init__(self, cfg: MEDSTorchDataConfig, split: str):
         super().__init__()
 
-        # Lock the cfg against further mutation while it's attached to this dataset — see
-        # `MEDSTorchDataConfig.lock()` / `unlock()` for the full contract and escape hatch.
-        cfg.lock()
-
         self.config: MEDSTorchDataConfig = cfg
         self.split: str = split
 
@@ -335,6 +331,12 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         # (another optional tensor, mode-specific file selection, etc.), the cache key
         # must expand to match — otherwise stale entries will be served.
         self._jnrt_cache: dict[tuple[str, frozenset[str]], JointNestedRaggedTensorDict] = {}
+
+        # Lock the cfg only after init has fully succeeded — if any of the above raises
+        # (missing schema, column mismatch, etc.), the caller keeps a mutable cfg and can
+        # retry or modify without having to `unlock()` first. See `MEDSTorchDataConfig.lock()`
+        # / `unlock()` for the full contract and escape hatch.
+        cfg.lock()
 
     def __getstate__(self) -> dict:
         state = self.__dict__.copy()
