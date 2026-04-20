@@ -14,14 +14,14 @@ import numpy as np
 import polars as pl
 from hydra.core.config_store import ConfigStore
 from nested_ragged_tensors.ragged_numpy import JointNestedRaggedTensorDict
-from omegaconf import open_dict
+from omegaconf import OmegaConf, open_dict
 
 from .types import BatchMode, PaddingSide, StaticInclusionMode, SubsequenceSamplingStrategy
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class MEDSTorchDataConfig:
     """A data class for storing configuration options for building a PyTorch dataset from a MEDS dataset.
 
@@ -449,11 +449,24 @@ class MEDSTorchDataConfig:
                 node = node[key]
 
         node = node[f"{cls.__name__}.yaml"].node
+        # `frozen=True` propagates through OmegaConf's dataclass adapter as `readonly=True`
+        # on the node, which blocks both the `_target_` injection here *and* downstream
+        # Hydra `compose(overrides=...)` calls. The Python-level immutability contract
+        # (preventing `config.X = Y` after construction) is orthogonal to whether the
+        # Hydra-layer override mechanism works, so un-set readonly on the stored schema
+        # while still letting `MEDSTorchDataConfig(...)` remain frozen at the Python
+        # boundary. `open_dict` lifts struct mode so `_target_` (undeclared on the dataclass)
+        # can be added.
+        OmegaConf.set_readonly(node, False)
         with open_dict(node):
             node["_target_"] = f"{cls.__module__}.{cls.__name__}"
 
     def __post_init__(self):
-        self.tensorized_cohort_dir = Path(self.tensorized_cohort_dir)
+        # `frozen=True` blocks plain `self.x = ...` assignments; normalizing inputs to their
+        # canonical types at construction time requires `object.__setattr__` on the frozen
+        # instance. This is the documented frozen-dataclass escape hatch for __post_init__
+        # coercion; callers can't use it because it's explicitly not a public API.
+        object.__setattr__(self, "tensorized_cohort_dir", Path(self.tensorized_cohort_dir))
         if not self.tensorized_cohort_dir.is_dir():
             raise FileNotFoundError(
                 "tensorized_cohort_dir must be a valid directory. "
@@ -462,7 +475,9 @@ class MEDSTorchDataConfig:
 
         match self.static_inclusion_mode:
             case str() if self.static_inclusion_mode in {x.value for x in StaticInclusionMode}:
-                self.static_inclusion_mode = StaticInclusionMode(self.static_inclusion_mode)
+                object.__setattr__(
+                    self, "static_inclusion_mode", StaticInclusionMode(self.static_inclusion_mode)
+                )
             case StaticInclusionMode():  # pragma: no cover
                 pass
             case _:
@@ -470,14 +485,18 @@ class MEDSTorchDataConfig:
 
         match self.seq_sampling_strategy:
             case str() if self.seq_sampling_strategy in {x.value for x in SubsequenceSamplingStrategy}:
-                self.seq_sampling_strategy = SubsequenceSamplingStrategy(self.seq_sampling_strategy)
+                object.__setattr__(
+                    self,
+                    "seq_sampling_strategy",
+                    SubsequenceSamplingStrategy(self.seq_sampling_strategy),
+                )
             case SubsequenceSamplingStrategy():  # pragma: no cover
                 pass
             case _:
                 raise ValueError(f"Invalid subsequence sampling strategy: {self.seq_sampling_strategy}")
 
         if self.task_labels_dir is not None:
-            self.task_labels_dir = Path(self.task_labels_dir)
+            object.__setattr__(self, "task_labels_dir", Path(self.task_labels_dir))
             if not self.task_labels_dir.is_dir():
                 raise FileNotFoundError(
                     "If specified, task_labels_dir must be a valid directory. "

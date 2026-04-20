@@ -228,6 +228,14 @@ File path parameters include:
 - `tensorized_cohort_dir`: The directory containing the tensorized data.
 - `task_labels_dir`: The directory containing the task labels files.
 
+> [!NOTE]
+> `MEDSTorchDataConfig` is an immutable (frozen) dataclass. To derive a modified config,
+> use `dataclasses.replace(cfg, field=value)` and construct a fresh `MEDSPytorchDataset`
+> around it; direct assignment like `cfg.field = value` raises `FrozenInstanceError`.
+> Immutability protects against silently inconsistent state when a `DataLoader` with
+> `persistent_workers=True` (the default for `num_workers>0` via `Datamodule`) keeps
+> worker-process dataset copies alive across epochs.
+
 It also provides a convenient property to get the vocab size for the dataset, given by the vocab indices in
 the tensorized metadata. Let's start by building a configuration object for this data and inspect some of its
 file-path related properties and helpers:
@@ -299,6 +307,7 @@ subject IDs and the end of the allowed region of reading for the dataset. We can
 format via the `schema_df`:
 
 ```python
+>>> import dataclasses
 >>> from meds_torchdata import MEDSPytorchDataset
 >>> cfg = MEDSTorchDataConfig(tensorized_cohort_dir=tensorized_MEDS_dataset, max_seq_len=5)
 >>> pyd = MEDSPytorchDataset(cfg, split="train")
@@ -542,8 +551,13 @@ This example shows what the output looks like if we set the static data inclusio
 we set it to `"prepend"` instead? To show this in a stable manner, we'll also use the seeded version of the
 get item function, `_seeded_getitem`:
 
+`MEDSTorchDataConfig` is frozen after construction; `dataclasses.replace` builds a new
+config with the override and we rebuild the dataset around it.
+
 ```python
->>> pyd.config.static_inclusion_mode = "prepend"
+>>> pyd = MEDSPytorchDataset(
+...     dataclasses.replace(pyd.config, static_inclusion_mode="prepend"), split="train"
+... )
 >>> print_element(pyd._seeded_getitem(2, seed=0))
 n_static_seq_els (int):
 2
@@ -556,7 +570,9 @@ numeric_value
 .
 time_delta_days
 [       nan        nan 0.         0.         0.09787037]
->>> pyd.config.static_inclusion_mode = "include"
+>>> pyd = MEDSPytorchDataset(
+...     dataclasses.replace(pyd.config, static_inclusion_mode="include"), split="train"
+... )
 
 ```
 
@@ -786,7 +802,9 @@ a separate entry in the batch. What about with the other two options, `"omit"` a
 If we use `"omit"`, we can see that the static data is omitted from the output:
 
 ```python
->>> pyd_with_task.config.static_inclusion_mode = "omit"
+>>> pyd_with_task = MEDSPytorchDataset(
+...     dataclasses.replace(pyd_with_task.config, static_inclusion_mode="omit"), split="train"
+... )
 >>> print(next(iter(pyd_with_task.get_dataloader(batch_size=2))))
 MEDSTorchBatch:
 │ Mode: Subject-Measurement (SM)
@@ -825,7 +843,9 @@ What if we use a static inclusion mode of `"prepend"`? We can see that the stati
 dynamic data:
 
 ```python
->>> pyd_with_task.config.static_inclusion_mode = "prepend"
+>>> pyd_with_task = MEDSPytorchDataset(
+...     dataclasses.replace(pyd_with_task.config, static_inclusion_mode="prepend"), split="train"
+... )
 >>> print(next(iter(pyd_with_task.get_dataloader(batch_size=2))))
 MEDSTorchBatch:
 │ Mode: Subject-Measurement (SM)
@@ -860,7 +880,10 @@ MEDSTorchBatch:
 │ │ Labels:
 │ │ │ boolean_value (torch.bool):
 │ │ │ │ [False,  True]
->>> pyd_with_task.config.static_inclusion_mode = "include" # reset to default
+>>> pyd_with_task = MEDSPytorchDataset(
+...     dataclasses.replace(pyd_with_task.config, static_inclusion_mode="include"),
+...     split="train",
+... )  # reset to default
 
 ```
 
@@ -869,7 +892,9 @@ default output to be at a _measurement_ level, rather than an _event_ level, by 
 `batch_mode` to `SM`. Let's see what happens if we change that:
 
 ```python
->>> pyd.config.batch_mode = "SEM"
+>>> pyd = MEDSPytorchDataset(
+...     dataclasses.replace(pyd.config, batch_mode="SEM"), split="train"
+... )
 >>> print_element(pyd[2])
 static_code (list):
 [8, 9]
@@ -953,7 +978,9 @@ MEDSTorchBatch:
 │ │ │ static_numeric_value_mask (torch.bool):
 │ │ │ │ [[False,  True],
 │ │ │ │  [False,  True]]
->>> pyd_with_task.config.batch_mode = "SEM"
+>>> pyd_with_task = MEDSPytorchDataset(
+...     dataclasses.replace(pyd_with_task.config, batch_mode="SEM"), split="train"
+... )
 >>> print(next(iter(pyd_with_task.get_dataloader(batch_size=2))))
 MEDSTorchBatch:
 │ Mode: Subject-Event-Measurement (SEM)
@@ -1022,7 +1049,9 @@ MEDSTorchBatch:
 │ │ Labels:
 │ │ │ boolean_value (torch.bool):
 │ │ │ │ [False,  True]
->>> pyd_with_task.config.static_inclusion_mode = "omit"
+>>> pyd_with_task = MEDSPytorchDataset(
+...     dataclasses.replace(pyd_with_task.config, static_inclusion_mode="omit"), split="train"
+... )
 >>> print(next(iter(pyd_with_task.get_dataloader(batch_size=2))))
 MEDSTorchBatch:
 │ Mode: Subject-Event-Measurement (SEM)
@@ -1079,7 +1108,9 @@ MEDSTorchBatch:
 │ │ Labels:
 │ │ │ boolean_value (torch.bool):
 │ │ │ │ [False,  True]
->>> pyd_with_task.config.static_inclusion_mode = "prepend"
+>>> pyd_with_task = MEDSPytorchDataset(
+...     dataclasses.replace(pyd_with_task.config, static_inclusion_mode="prepend"), split="train"
+... )
 >>> print(next(iter(pyd_with_task.get_dataloader(batch_size=2))))
 MEDSTorchBatch:
 │ Mode: Subject-Event-Measurement (SEM)
