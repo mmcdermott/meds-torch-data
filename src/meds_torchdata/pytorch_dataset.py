@@ -26,8 +26,10 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
     Key design principles:
       1. The class will store an `index` variable that specifies what is the valid range of data to consider
          for any given subject in the dataset corresponding to an integer index passed to `__getitem__`.
-      2. Data will only be loaded for subjects on an as-needed basis, and will not be cached, to minimize
-         memory usage during normal operation.
+      2. Subject tensor data is loaded on an as-needed basis and is not cached, to minimize memory
+         usage during normal operation. (JNRT *handles* are memoized per `(shard, load_keys)` on
+         `self._jnrt_cache` to avoid rebuilding the handle object on every `__getitem__` — this
+         is a Python-level wrapper cache, not a cache of the underlying tensor bytes.)
       3. As much work as possible should be relegated to separate dataset pre-processing (resulting in files
          stored on disk) rather than this class to streamline operation.
       4. The primary input to this class in terms of data is a pre-processed set of "schema files" and "nested
