@@ -34,8 +34,9 @@ Optional extras:
 
 - `meds-torch-data[lightning]` — pulls in the `lightning` dep and enables
     `meds_torchdata.extensions.Datamodule`, a PyTorch Lightning `DataModule` wrapper around `MEDSPytorchDataset`.
-- `meds-torch-data[parallelized]` — pulls in `hydra-joblib-launcher` so the preprocessing pipeline can
-    execute stages in parallel via `stage_runner_fp=<path>` (see the "Parallel execution" note below).
+- `meds-torch-data[joblib]` — pulls in `hydra-joblib-launcher`, the [joblib](https://joblib.readthedocs.io/)-based
+    backend for the preprocessing pipeline's `stage_runner_fp=<path>` parallelism (see "Parallel execution" below).
+    Other Hydra launchers (e.g. `slurm`) stay in their own extras, hence the backend-specific name.
 
 ### Step 2: Data Tensorization
 
@@ -1219,7 +1220,7 @@ The `MTD_preprocess` command runs the following pre-processing stages:
 > ```
 >
 > Then: `MTD_preprocess MEDS_dataset_dir=... output_dir=... stage_runner_fp=stage_runner.yaml`. The
-> `joblib` launcher requires the optional `meds-torch-data[parallelized]` extra
+> `joblib` launcher requires the optional `meds-torch-data[joblib]` extra
 > (`hydra-joblib-launcher`). The `N_WORKERS` env var from pre-0.8 releases is no longer consulted.
 
 ### Advanced features

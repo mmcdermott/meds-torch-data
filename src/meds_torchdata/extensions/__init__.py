@@ -2,7 +2,7 @@ try:
     import lightning
 
     _HAS_LIGHTNING = True
-except ImportError:  # pragma: no cover - exercised in CI envs without the `lightning` extra
+except ImportError:
     _HAS_LIGHTNING = False
 
 if _HAS_LIGHTNING:

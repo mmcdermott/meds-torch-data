@@ -27,7 +27,7 @@ jobs:
       - name: Run tests
         run: >
           uv run pytest -v --cov=src --cov-report=xml
-          -m "not parallelized and not lightning"
+          -m "not joblib and not lightning"
           --ignore="benchmark" --ignore="src/meds_torchdata/extensions"
 
       - name: Upload coverage to Codecov
@@ -52,7 +52,7 @@ jobs:
 
       - name: Run test/* tests with lightning
         run: |
-          uv run pytest -v --cov=src --cov-report=xml tests/ -m "lightning and not parallelized"
+          uv run pytest -v --cov=src --cov-report=xml tests/ -m "lightning and not joblib"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5.5.4
@@ -62,11 +62,11 @@ jobs:
 
       - name: Install joblib
         run: |
-          uv sync --locked --extra parallelized
+          uv sync --locked --extra joblib
 
       - name: Run tests with joblib
         run: |
-          uv run pytest -v --cov=src --cov-report=xml tests/ -m "parallelized and not lightning"
+          uv run pytest -v --cov=src --cov-report=xml tests/ -m "joblib and not lightning"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5.5.4

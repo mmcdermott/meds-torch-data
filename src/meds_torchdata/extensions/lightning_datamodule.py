@@ -94,6 +94,17 @@ class Datamodule(L.LightningDataModule, Generic[DatasetT]):
         'custom'
         >>> D.train_dataset is D.val_dataset
         False
+
+    `data_class` also accepts a dotted-path string, which is resolved via Hydra's
+    `get_class` — lets Hydra `_target_`-style instantiations wire a custom dataset class
+    without importing it explicitly in the config.
+
+        >>> D = Datamodule(
+        ...     config=sample_dataset_config, batch_size=1,
+        ...     data_class="meds_torchdata.MEDSPytorchDataset",
+        ... )
+        >>> D.data_class is MEDSPytorchDataset
+        True
     """
 
     config: MEDSTorchDataConfig

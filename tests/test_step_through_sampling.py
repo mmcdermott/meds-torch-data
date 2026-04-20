@@ -235,3 +235,77 @@ def test_step_through_prepend_respects_max_seq_len(tensorized_MEDS_dataset, batc
     assert seq_axis <= cfg.max_seq_len, (
         f"Collated batch shape {batch.time_delta_days.shape} exceeds max_seq_len={cfg.max_seq_len}"
     )
+
+
+def test_step_through_prepend_exhausts_window(tensorized_MEDS_dataset):
+    """PREPEND + max_seq_len == len(static_code) leaves zero effective dynamic window.
+
+    The fixture subjects all have two static codes; `max_seq_len=2` in SM + PREPEND
+    therefore reserves every slot for static data, leaving no room for dynamic events.
+    The dataset raises on `__init__` rather than silently skipping the subjects.
+    """
+    cfg = MEDSTorchDataConfig(
+        tensorized_cohort_dir=tensorized_MEDS_dataset,
+        max_seq_len=2,
+        seq_sampling_strategy="step_through",
+        step_through_stride=1,
+        batch_mode="SM",
+        static_inclusion_mode="prepend",
+    )
+    with pytest.raises(ValueError, match=r"Effective dynamic window size"):
+        MEDSPytorchDataset(cfg, split="train")
+
+
+def test_step_through_stride_exceeds_effective_window(tensorized_MEDS_dataset):
+    """`step_through_stride` greater than the per-subject effective window must raise.
+
+    The stride is the distance between successive window *starts*; if it's wider than
+    the window itself, we leave uncovered gaps between windows — step-through is
+    supposed to guarantee full coverage, so this is rejected at `__init__` time.
+    """
+    cfg = MEDSTorchDataConfig(
+        tensorized_cohort_dir=tensorized_MEDS_dataset,
+        max_seq_len=3,
+        seq_sampling_strategy="step_through",
+        step_through_stride=10,  # >> max_seq_len = effective_window in INCLUDE mode
+        batch_mode="SM",
+        static_inclusion_mode="include",
+    )
+    with pytest.raises(ValueError, match=r"step_through stride .* exceeds the effective window width"):
+        MEDSPytorchDataset(cfg, split="train")
+
+
+def test_step_through_ends_sm_static_only_subject(tensorized_MEDS_dataset):
+    """`_step_through_ends_sm` emits a single trivial window for static-only subjects.
+
+    Tokenization's full-outer join surfaces `null` in `measurements_per_event` for a
+    subject that appears only in static data. The SM step-through walker must handle
+    this without crashing — it emits `([0], [0])` so `self.index` still has one entry
+    per subject and downstream `__getitem__` returns an empty dynamic sequence.
+    """
+    cfg = MEDSTorchDataConfig(
+        tensorized_cohort_dir=tensorized_MEDS_dataset,
+        max_seq_len=5,
+        seq_sampling_strategy="step_through",
+        step_through_stride=3,
+        batch_mode="SM",
+        static_inclusion_mode="omit",
+    )
+    dataset = MEDSPytorchDataset(cfg, split="train")
+
+    # Patch one subject's `measurements_per_event` to null (simulating a static-only
+    # subject) and re-run `_step_through_ends_sm` for it. polars DataFrames are
+    # immutable; replace the whole shard df with a version where subject 0's
+    # measurements_per_event is None.
+    subject_id = next(iter(dataset.subj_locations))
+    shard, subj_idx = dataset.subj_locations[subject_id]
+    original_df = dataset.schema_dfs_by_shard[shard]
+    n_rows = len(original_df)
+    null_col = pl.Series(
+        "measurements_per_event",
+        [None if i == subj_idx else original_df["measurements_per_event"][i] for i in range(n_rows)],
+        dtype=original_df.schema["measurements_per_event"],
+    )
+    dataset.schema_dfs_by_shard[shard] = original_df.with_columns(null_col)
+
+    assert dataset._step_through_ends_sm(subject_id, stride=3, effective_window=5) == ([0], [0])
