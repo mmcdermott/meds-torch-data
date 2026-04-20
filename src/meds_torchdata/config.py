@@ -533,6 +533,112 @@ class MEDSTorchDataConfig:
                     f"got strategy {self.seq_sampling_strategy} with overlap {self.step_through_overlap!r}."
                 )
 
+    def lock(self) -> None:
+        """Lock this config against further mutation.
+
+        Called automatically by `MEDSPytorchDataset.__init__` so the dataset can rely on
+        its config being stable across its lifetime — schema columns loaded, index
+        construction, JNRT cache keys, worker pickles. Idempotent; locking an already-locked
+        config is a no-op.
+
+        To mutate a locked config, either call `unlock()` first (with the caveat that the
+        change will not propagate into an already-attached dataset or its workers) or use
+        `dataclasses.replace(cfg, field=value)` to derive a new config.
+
+        Examples:
+            >>> from meds_torchdata import MEDSPytorchDataset, MEDSTorchDataConfig
+            >>> cfg = MEDSTorchDataConfig(tensorized_cohort_dir=tensorized_MEDS_dataset, max_seq_len=5)
+            >>> cfg.max_seq_len = 10  # mutable pre-lock
+            >>> cfg.max_seq_len
+            10
+            >>> cfg.lock()
+            >>> cfg.max_seq_len = 20
+            Traceback (most recent call last):
+                ...
+            RuntimeError: Cannot mutate `max_seq_len` on a locked MEDSTorchDataConfig...
+
+            `MEDSPytorchDataset.__init__` calls `lock()` on its input, so direct construction
+            produces the same locked state:
+
+            >>> cfg = MEDSTorchDataConfig(tensorized_cohort_dir=tensorized_MEDS_dataset, max_seq_len=5)
+            >>> pyd = MEDSPytorchDataset(cfg, split="train")
+            >>> cfg.max_seq_len = 20
+            Traceback (most recent call last):
+                ...
+            RuntimeError: Cannot mutate `max_seq_len` on a locked MEDSTorchDataConfig...
+        """
+        object.__setattr__(self, "_locked", True)
+
+    def unlock(self) -> None:
+        """Unlock a previously-locked config.
+
+        Emits a `UserWarning` when called on a currently-locked config — the typical
+        source of the lock is a `MEDSPytorchDataset` that has already captured the config's
+        state, so post-unlock mutations will not propagate into that dataset's
+        main-process view *or* its worker-process copies (which live on separate cfg
+        snapshots under `persistent_workers=True`, the default when `num_workers > 0`).
+        Users who explicitly want the escape hatch get it; they get a loud pointer at the
+        idiomatic alternative (`dataclasses.replace` + fresh `MEDSPytorchDataset`) too.
+
+        **Which fields can be mutated safely after unlock?** None of them in a
+        `num_workers > 0` DataLoader — workers pickle their own snapshot at spawn and
+        never see main-process mutations. In a **single-process** setting (`num_workers=0`,
+        direct `dataset[i]` access), the fields read fresh per hot-path call — and thus
+        safe to flip — are `padding_side`, `include_numeric_value`, `include_time_delta`,
+        `include_subject_window_counts_in_batch`, and `max_seq_len` when
+        `seq_sampling_strategy != STEP_THROUGH`. Every other field (sampling strategy,
+        batch mode, static mode, task labels dir, step-through params, window-last-observed,
+        tensorized cohort dir) is baked into dataset init state and flipping it
+        post-handoff leaves the dataset in an inconsistent state. For those, use
+        `dataclasses.replace(cfg, field=value)` + construct a fresh dataset instead.
+
+        Examples:
+            >>> import warnings
+            >>> cfg = MEDSTorchDataConfig(tensorized_cohort_dir=tensorized_MEDS_dataset, max_seq_len=5)
+            >>> cfg.lock()
+            >>> with warnings.catch_warnings(record=True) as caught:
+            ...     warnings.simplefilter("always")
+            ...     cfg.unlock()
+            ...     print(len(caught), caught[0].category.__name__)
+            1 UserWarning
+            >>> cfg.max_seq_len = 99  # mutable again
+            >>> cfg.max_seq_len
+            99
+
+            Calling `unlock()` on an already-unlocked config is a silent no-op:
+
+            >>> with warnings.catch_warnings(record=True) as caught:
+            ...     warnings.simplefilter("always")
+            ...     cfg.unlock()
+            ...     print(len(caught))
+            0
+        """
+        if getattr(self, "_locked", False):
+            import warnings
+
+            warnings.warn(
+                "Unlocking a locked MEDSTorchDataConfig. If this config is attached to a "
+                "MEDSPytorchDataset, post-unlock mutations will not propagate into the "
+                "dataset's main-process state or its worker-process copies. Prefer "
+                "`dataclasses.replace(cfg, field=value)` and constructing a fresh "
+                "MEDSPytorchDataset.",
+                stacklevel=2,
+            )
+        object.__setattr__(self, "_locked", False)
+
+    def __setattr__(self, key: str, value) -> None:
+        if getattr(self, "_locked", False):
+            raise RuntimeError(
+                f"Cannot mutate `{key}` on a locked MEDSTorchDataConfig. The lock is set "
+                "automatically when the config is handed to `MEDSPytorchDataset`, because "
+                "the dataset captures its state at init time and mutations here would not "
+                "propagate (and would not reach worker processes under "
+                "`persistent_workers=True`). Either call `cfg.unlock()` first (accepting "
+                "that caveat) or use `dataclasses.replace(cfg, "
+                f"{key}=...)` to derive a new config and construct a fresh dataset."
+            )
+        object.__setattr__(self, key, value)
+
     @property
     def code_metadata_fp(self) -> Path:
         """Return the code metadata file for this cohort.
