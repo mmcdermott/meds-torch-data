@@ -40,7 +40,7 @@ benchmarks = ["ml-mixins[memtrackable]>=0.2", "rootutils"]
 [tool.setuptools_scm]
 
 [project.optional-dependencies]
-parallelized = ["hydra-joblib-launcher~=1.2.0"]
+joblib = ["hydra-joblib-launcher~=1.2.0"]
 lightning = ["lightning~=2.5.1"]
 # `docs` must live here (a PEP 621 optional-dependency / "extra") rather than under
 # `[dependency-groups]` so that `.readthedocs.yaml`'s `extra_requirements: [docs]`
@@ -66,7 +66,7 @@ addopts = [
   "--doctest-glob=*.md",
 ]
 markers = [
-  "parallelized: mark test as parallelized, requiring the optional dependency 'hydra-joblib-launcher'",
+  "joblib: mark test as requiring the optional joblib-based parallelism extra (`hydra-joblib-launcher`)",
   "lightning: mark test as requiring the optional dependency 'lightning'",
 ]
 doctest_optionflags = ["NORMALIZE_WHITESPACE", "ELLIPSIS"]

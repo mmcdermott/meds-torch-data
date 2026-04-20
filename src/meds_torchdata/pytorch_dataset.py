@@ -660,7 +660,10 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         schema_row = self.schema_dfs_by_shard[shard][subject_idx]
         meas_per_event_series = schema_row["measurements_per_event"].item()
         if meas_per_event_series is None:
-            # Subject with no dynamic data — single trivial window.
+            # Subject with no dynamic data (static-only — the tokenization full-outer
+            # join surfaces `null` in `measurements_per_event` for subjects absent from
+            # the dynamic side). Emit a single trivial window so step-through iteration
+            # still produces one index entry for this subject.
             return [0], [0]
         meas_per_event = meas_per_event_series.to_list()
         cum_meas = np.cumsum([0, *meas_per_event])

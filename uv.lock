@@ -821,11 +821,11 @@ docs = [
     { name = "mkdocstrings", extra = ["python"] },
     { name = "mkdocstrings-shell" },
 ]
+joblib = [
+    { name = "hydra-joblib-launcher" },
+]
 lightning = [
     { name = "lightning" },
-]
-parallelized = [
-    { name = "hydra-joblib-launcher" },
 ]
 
 [package.dev-dependencies]
@@ -843,7 +843,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "hydra-core", specifier = ">=1.3" },
-    { name = "hydra-joblib-launcher", marker = "extra == 'parallelized'", specifier = "~=1.2.0" },
+    { name = "hydra-joblib-launcher", marker = "extra == 'joblib'", specifier = "~=1.2.0" },
     { name = "lightning", marker = "extra == 'lightning'", specifier = "~=2.5.1" },
     { name = "markdown-callouts", marker = "extra == 'docs'" },
     { name = "meds", specifier = ">=0.4,<0.5" },
@@ -866,7 +866,7 @@ requires-dist = [
     { name = "torch", specifier = ">=2.0" },
     { name = "yaml-to-disk", extras = ["parquet"] },
 ]
-provides-extras = ["parallelized", "lightning", "docs"]
+provides-extras = ["joblib", "lightning", "docs"]
 
 [package.metadata.requires-dev]
 benchmarks = [

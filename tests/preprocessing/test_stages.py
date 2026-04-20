@@ -45,12 +45,12 @@ def test_pipeline_serial():
     )
 
 
-@pytest.mark.parallelized
+@pytest.mark.joblib
 def test_pipeline_parallel():
     """Same pipeline, run through joblib — replaces bespoke `test_preprocess_parallel.py`.
 
-    Gated on the `parallelized` marker so CI skips when `hydra-joblib-launcher` isn't
-    installed (the existing optional dep used for the old parallel test).
+    Gated on the `joblib` marker so CI skips when `hydra-joblib-launcher` isn't
+    installed (the optional extra `meds-torch-data[joblib]`).
     """
     pipeline_tester(
         pipeline_yaml=_PIPELINE_YAML,

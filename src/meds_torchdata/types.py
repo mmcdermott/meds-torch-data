@@ -1058,6 +1058,26 @@ class MEDSTorchBatch:
             ...
         TypeError: Field 'code' expected type <class 'torch.LongTensor'>, got type <class 'torch.Tensor'>.
 
+    `numeric_value` and `numeric_value_mask` are treated as a pair — both must be present, or
+    both must be omitted. Providing one without the other is rejected before any shape check:
+
+        >>> batch = MEDSTorchBatch(
+        ...     code=torch.tensor([[1, 2, 3]]),
+        ...     numeric_value=torch.zeros((1, 1, 3), dtype=torch.float32),
+        ... )
+        Traceback (most recent call last):
+            ...
+        ValueError: numeric_value and numeric_value_mask must both be provided or both be
+        None, but got numeric_value=present and numeric_value_mask=None.
+        >>> batch = MEDSTorchBatch(
+        ...     code=torch.tensor([[1, 2, 3]]),
+        ...     numeric_value_mask=torch.ones((1, 1, 3), dtype=torch.bool),
+        ... )
+        Traceback (most recent call last):
+            ...
+        ValueError: numeric_value and numeric_value_mask must both be provided or both be
+        None, but got numeric_value=None and numeric_value_mask=present.
+
     In addition, the shapes of the tensors must be consistent. To begin with, the code tensor's shape must
     correctly align with one of the allowed modes (SEM or SM):
 
