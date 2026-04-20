@@ -6,7 +6,7 @@ enumeration objects for categorical options and a general DataClass configuratio
 
 import logging
 from collections.abc import Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from functools import cached_property
 from pathlib import Path
 
@@ -590,6 +590,18 @@ class MEDSTorchDataConfig:
             >>> cfg.max_seq_len = 42  # no error, cfg is still mutable
             >>> cfg.max_seq_len
             42
+
+            The error message differentiates by whether the attempted key is a real
+            config field. Typos / non-declared attributes get a dedicated message that
+            doesn't recommend `dataclasses.replace` (which would reject the bad key):
+
+            >>> cfg = MEDSTorchDataConfig(tensorized_cohort_dir=tensorized_MEDS_dataset, max_seq_len=5)
+            >>> cfg.lock()
+            >>> cfg.maks_seq_len = 10
+            Traceback (most recent call last):
+                ...
+            RuntimeError: Cannot set `maks_seq_len` on a locked MEDSTorchDataConfig:
+            `maks_seq_len` is not a declared field...
         """
         object.__setattr__(self, "_locked", True)
 
@@ -652,14 +664,27 @@ class MEDSTorchDataConfig:
 
     def __setattr__(self, key: str, value) -> None:
         if getattr(self, "_locked", False):
+            # Branch on whether the key is a real dataclass field. `dataclasses.replace`
+            # only accepts declared fields, so recommending it for a typo / ad-hoc attribute
+            # would produce a `TypeError: __init__() got an unexpected keyword argument`
+            # when the user tried to follow our guidance.
+            if key in {f.name for f in fields(self)}:
+                raise RuntimeError(
+                    f"Cannot mutate `{key}` on a locked MEDSTorchDataConfig. The lock is "
+                    "set automatically when the config is handed to `MEDSPytorchDataset`, "
+                    "because the dataset captures its state at init time and mutations "
+                    "here would not propagate (and would not reach worker processes under "
+                    "`persistent_workers=True`). Either call `cfg.unlock()` first "
+                    "(accepting that caveat) or use "
+                    f"`dataclasses.replace(cfg, {key}=...)` to derive a new config and "
+                    "construct a fresh dataset."
+                )
             raise RuntimeError(
-                f"Cannot mutate `{key}` on a locked MEDSTorchDataConfig. The lock is set "
-                "automatically when the config is handed to `MEDSPytorchDataset`, because "
-                "the dataset captures its state at init time and mutations here would not "
-                "propagate (and would not reach worker processes under "
-                "`persistent_workers=True`). Either call `cfg.unlock()` first (accepting "
-                "that caveat) or use `dataclasses.replace(cfg, "
-                f"{key}=...)` to derive a new config and construct a fresh dataset."
+                f"Cannot set `{key}` on a locked MEDSTorchDataConfig: `{key}` is not a "
+                "declared field on this class (did you mean to mutate a real config "
+                f"field, or is this a typo?). Valid fields: "
+                f"{sorted(f.name for f in fields(self))}. If you're intentionally "
+                "adding a dynamic attribute on the instance, call `cfg.unlock()` first."
             )
         object.__setattr__(self, key, value)
 
