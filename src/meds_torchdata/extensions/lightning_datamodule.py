@@ -28,7 +28,17 @@ class Datamodule(L.LightningDataModule, Generic[DatasetT]):
     Attributes:
         config: The configuration for the dataset.
         batch_size: The batch size for the dataloaders. Defaults to 32.
-        num_workers: The number of workers for the dataloaders. Defaults to 0.
+        num_workers: The number of workers for the dataloaders. Defaults to `None` (PyTorch's
+            `num_workers=0`); no safe universal default exists, so this is always user-supplied.
+        pin_memory: Whether to allocate batches in page-locked memory for faster GPU transfer.
+            Defaults to `None` (PyTorch's `False`); CUDA-detection auto-enabling is brittle
+            across MPS/ROCm/CPU, so this is left for the user.
+        persistent_workers: Whether workers persist across epochs. Defaults to `True` when
+            `num_workers > 0` (strict improvement — avoids re-spawning workers and re-running
+            `MEDSPytorchDataset.__init__` each epoch at the cost of keeping worker RSS alive).
+            Set `False` to opt out.
+        prefetch_factor: Number of batches prefetched by each worker. Defaults to `None`
+            (PyTorch's built-in default of 2). Raising helps on slow storage.
 
     Examples:
         >>> D = Datamodule(config=sample_dataset_config, batch_size=2)
@@ -58,14 +68,33 @@ class Datamodule(L.LightningDataModule, Generic[DatasetT]):
         MEDSTorchBatch(code=tensor([[ 5,  3, 10, 11,  4]]), ..., n_subject_windows=None)
 
     You can also set the number of workers to a non-zero value, and it will be applied to the created
-    dataloaders, along with batch size, through the `shared_dataloader_kwargs` property.
+    dataloaders, along with batch size, through the `shared_dataloader_kwargs` property. When
+    `num_workers > 0`, `persistent_workers` defaults to `True` so workers survive across epochs
+    and avoid re-running `MEDSPytorchDataset.__init__` (schema reads, index build) each epoch.
 
         >>> D = Datamodule(config=sample_dataset_config, batch_size=1, num_workers=4)
         >>> D.shared_dataloader_kwargs
-        {'batch_size': 1, 'num_workers': 4}
+        {'batch_size': 1, 'num_workers': 4, 'persistent_workers': True}
         >>> test_dataloader = D.test_dataloader()
         >>> next(iter(test_dataloader))
         MEDSTorchBatch(code=tensor([[ 5,  2, 10, 11, 10, 11, 10, 11,  4]]), ..., n_subject_windows=None)
+
+    Pass `persistent_workers=False` to opt out of the auto-enable — useful for constrained-memory
+    settings where releasing worker RSS between epochs matters more than per-epoch spawn cost.
+
+        >>> D = Datamodule(
+        ...     config=sample_dataset_config, batch_size=1, num_workers=4,
+        ...     persistent_workers=False,
+        ... )
+        >>> D.shared_dataloader_kwargs
+        {'batch_size': 1, 'num_workers': 4, 'persistent_workers': False}
+
+    With `num_workers=0` (or unset), `persistent_workers` isn't auto-populated — PyTorch rejects
+    `persistent_workers=True` without active workers.
+
+        >>> D = Datamodule(config=sample_dataset_config, batch_size=1)
+        >>> D.shared_dataloader_kwargs
+        {'batch_size': 1}
 
     You can also set the pin_memory flag to True, and it will be applied to the created dataloaders.
 
@@ -75,6 +104,20 @@ class Datamodule(L.LightningDataModule, Generic[DatasetT]):
         >>> test_dataloader = D.test_dataloader()
         >>> next(iter(test_dataloader))
         MEDSTorchBatch(code=tensor([[ 5,  2, 10, 11, 10, 11, 10, 11,  4]]), ..., n_subject_windows=None)
+
+    `prefetch_factor` is a pass-through — PyTorch's default of 2 is fine for most users, but
+    slow storage can benefit from raising it. Only takes effect when `num_workers > 0`;
+    passed-through values are dropped otherwise (PyTorch rejects `prefetch_factor` without
+    active workers).
+
+        >>> D = Datamodule(config=sample_dataset_config, batch_size=1, prefetch_factor=4)
+        >>> D.shared_dataloader_kwargs
+        {'batch_size': 1}
+        >>> D = Datamodule(
+        ...     config=sample_dataset_config, batch_size=1, num_workers=2, prefetch_factor=4,
+        ... )
+        >>> D.shared_dataloader_kwargs
+        {'batch_size': 1, 'num_workers': 2, 'prefetch_factor': 4, 'persistent_workers': True}
 
     You can also override the dataset class used by the datamodule via the `data_class` argument. This is
     useful for injecting convenience helpers or light instrumentation while retaining the core
@@ -112,6 +155,8 @@ class Datamodule(L.LightningDataModule, Generic[DatasetT]):
     batch_size: int
     num_workers: int | None
     pin_memory: bool | None = None
+    persistent_workers: bool | None = None
+    prefetch_factor: int | None = None
 
     def __init__(
         self,
@@ -120,6 +165,8 @@ class Datamodule(L.LightningDataModule, Generic[DatasetT]):
         batch_size: int = 32,
         num_workers: int | None = None,
         pin_memory: bool | None = None,
+        persistent_workers: bool | None = None,
+        prefetch_factor: int | None = None,
     ):
         super().__init__()
         self.config = config
@@ -129,12 +176,16 @@ class Datamodule(L.LightningDataModule, Generic[DatasetT]):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.pin_memory = pin_memory
+        self.persistent_workers = persistent_workers
+        self.prefetch_factor = prefetch_factor
 
         self.save_hyperparameters(
             {
                 "batch_size": batch_size,
                 "num_workers": num_workers,
                 "pin_memory": pin_memory,
+                "persistent_workers": persistent_workers,
+                "prefetch_factor": prefetch_factor,
                 "config": dataclasses.asdict(config),
             }
         )
@@ -142,9 +193,23 @@ class Datamodule(L.LightningDataModule, Generic[DatasetT]):
     @property
     def shared_dataloader_kwargs(self) -> dict:
         out = {"batch_size": self.batch_size}
-        for param in {"num_workers", "pin_memory"}:
+        for param in ("num_workers", "pin_memory"):
             if getattr(self, param) is not None:
                 out[param] = getattr(self, param)
+        workers_active = self.num_workers is not None and self.num_workers > 0
+        # `prefetch_factor` is meaningless without workers (PyTorch errors if passed with
+        # `num_workers=0`). Silently drop rather than forwarding an invalid combination.
+        if self.prefetch_factor is not None and workers_active:
+            out["prefetch_factor"] = self.prefetch_factor
+        # `persistent_workers` defaults to `True` whenever workers are active. Saves the
+        # worker-spawn + `MEDSPytorchDataset.__init__` cost (schema reads, index build) per
+        # epoch. Cost is purely memory retention across epochs, which for MTD is already
+        # bounded by the per-worker `schema_dfs_by_shard` copy. An explicit user value
+        # wins; PyTorch raises a clear error for the invalid `True + num_workers=0` combo.
+        if self.persistent_workers is not None:
+            out["persistent_workers"] = self.persistent_workers
+        elif workers_active:
+            out["persistent_workers"] = True
         return out
 
     @cached_property
