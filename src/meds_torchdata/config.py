@@ -552,7 +552,7 @@ class MEDSTorchDataConfig:
             >>> cfg.max_seq_len
             10
             >>> cfg.lock()
-            >>> cfg.max_seq_len = 20  # doctest: +ELLIPSIS
+            >>> cfg.max_seq_len = 20
             Traceback (most recent call last):
                 ...
             RuntimeError: Cannot mutate `max_seq_len` on a locked MEDSTorchDataConfig...
@@ -562,7 +562,7 @@ class MEDSTorchDataConfig:
 
             >>> cfg = MEDSTorchDataConfig(tensorized_cohort_dir=tensorized_MEDS_dataset, max_seq_len=5)
             >>> pyd = MEDSPytorchDataset(cfg, split="train")
-            >>> cfg.max_seq_len = 20  # doctest: +ELLIPSIS
+            >>> cfg.max_seq_len = 20
             Traceback (most recent call last):
                 ...
             RuntimeError: Cannot mutate `max_seq_len` on a locked MEDSTorchDataConfig...
