@@ -14,14 +14,14 @@ import numpy as np
 import polars as pl
 from hydra.core.config_store import ConfigStore
 from nested_ragged_tensors.ragged_numpy import JointNestedRaggedTensorDict
-from omegaconf import OmegaConf, open_dict
+from omegaconf import open_dict
 
 from .types import BatchMode, PaddingSide, StaticInclusionMode, SubsequenceSamplingStrategy
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
+@dataclass
 class MEDSTorchDataConfig:
     """A data class for storing configuration options for building a PyTorch dataset from a MEDS dataset.
 
@@ -449,24 +449,11 @@ class MEDSTorchDataConfig:
                 node = node[key]
 
         node = node[f"{cls.__name__}.yaml"].node
-        # `frozen=True` propagates through OmegaConf's dataclass adapter as `readonly=True`
-        # on the node, which blocks both the `_target_` injection here *and* downstream
-        # Hydra `compose(overrides=...)` calls. The Python-level immutability contract
-        # (preventing `config.X = Y` after construction) is orthogonal to whether the
-        # Hydra-layer override mechanism works, so un-set readonly on the stored schema
-        # while still letting `MEDSTorchDataConfig(...)` remain frozen at the Python
-        # boundary. `open_dict` lifts struct mode so `_target_` (undeclared on the dataclass)
-        # can be added.
-        OmegaConf.set_readonly(node, False)
         with open_dict(node):
             node["_target_"] = f"{cls.__module__}.{cls.__name__}"
 
     def __post_init__(self):
-        # `frozen=True` blocks plain `self.x = ...` assignments; normalizing inputs to their
-        # canonical types at construction time requires `object.__setattr__` on the frozen
-        # instance. This is the documented frozen-dataclass escape hatch for __post_init__
-        # coercion; callers can't use it because it's explicitly not a public API.
-        object.__setattr__(self, "tensorized_cohort_dir", Path(self.tensorized_cohort_dir))
+        self.tensorized_cohort_dir = Path(self.tensorized_cohort_dir)
         if not self.tensorized_cohort_dir.is_dir():
             raise FileNotFoundError(
                 "tensorized_cohort_dir must be a valid directory. "
@@ -475,9 +462,7 @@ class MEDSTorchDataConfig:
 
         match self.static_inclusion_mode:
             case str() if self.static_inclusion_mode in {x.value for x in StaticInclusionMode}:
-                object.__setattr__(
-                    self, "static_inclusion_mode", StaticInclusionMode(self.static_inclusion_mode)
-                )
+                self.static_inclusion_mode = StaticInclusionMode(self.static_inclusion_mode)
             case StaticInclusionMode():  # pragma: no cover
                 pass
             case _:
@@ -485,18 +470,14 @@ class MEDSTorchDataConfig:
 
         match self.seq_sampling_strategy:
             case str() if self.seq_sampling_strategy in {x.value for x in SubsequenceSamplingStrategy}:
-                object.__setattr__(
-                    self,
-                    "seq_sampling_strategy",
-                    SubsequenceSamplingStrategy(self.seq_sampling_strategy),
-                )
+                self.seq_sampling_strategy = SubsequenceSamplingStrategy(self.seq_sampling_strategy)
             case SubsequenceSamplingStrategy():  # pragma: no cover
                 pass
             case _:
                 raise ValueError(f"Invalid subsequence sampling strategy: {self.seq_sampling_strategy}")
 
         if self.task_labels_dir is not None:
-            object.__setattr__(self, "task_labels_dir", Path(self.task_labels_dir))
+            self.task_labels_dir = Path(self.task_labels_dir)
             if not self.task_labels_dir.is_dir():
                 raise FileNotFoundError(
                     "If specified, task_labels_dir must be a valid directory. "
@@ -551,6 +532,41 @@ class MEDSTorchDataConfig:
                     "step_through_overlap may only be set when seq_sampling_strategy is STEP_THROUGH; "
                     f"got strategy {self.seq_sampling_strategy} with overlap {self.step_through_overlap!r}."
                 )
+
+    def __setattr__(self, key: str, value) -> None:
+        """Reject mutations after the config has been handed off to a dataset.
+
+        `MEDSPytorchDataset` flips `_handed_off_to_dataset` on the config it receives (via
+        `object.__setattr__`, which bypasses this hook) and works from that captured state
+        for its entire lifetime — schema columns loaded, index construction, JNRT cache
+        keys, worker pickles. A post-handoff mutation on the main-process cfg would
+        silently fail to propagate to the dataset (or to workers under `persistent_workers=True`
+        from #107), desynchronizing state from config. Block the mutation with a pointer
+        to the idiomatic workaround (`dataclasses.replace`).
+
+        Examples:
+            >>> import dataclasses
+            >>> from meds_torchdata import MEDSPytorchDataset, MEDSTorchDataConfig
+            >>> cfg = MEDSTorchDataConfig(tensorized_cohort_dir=tensorized_MEDS_dataset, max_seq_len=5)
+            >>> cfg.max_seq_len = 10  # pre-handoff mutation: fine
+            >>> cfg.max_seq_len
+            10
+            >>> pyd = MEDSPytorchDataset(cfg, split="train")
+            >>> cfg.max_seq_len = 20  # doctest: +ELLIPSIS
+            Traceback (most recent call last):
+                ...
+            RuntimeError: Cannot mutate `max_seq_len` on a MEDSTorchDataConfig...
+        """
+        if getattr(self, "_handed_off_to_dataset", False):
+            raise RuntimeError(
+                f"Cannot mutate `{key}` on a MEDSTorchDataConfig after it has been passed "
+                "to a MEDSPytorchDataset — the dataset works from the config's state at "
+                "construction time, so the mutation would silently not take effect "
+                "(and would not reach worker processes under `persistent_workers=True`). "
+                f"Use `dataclasses.replace(cfg, {key}=...)` to derive a modified config "
+                "and construct a fresh MEDSPytorchDataset."
+            )
+        object.__setattr__(self, key, value)
 
     @property
     def code_metadata_fp(self) -> Path:

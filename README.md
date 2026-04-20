@@ -229,12 +229,12 @@ File path parameters include:
 - `task_labels_dir`: The directory containing the task labels files.
 
 > [!NOTE]
-> `MEDSTorchDataConfig` is an immutable (frozen) dataclass. To derive a modified config,
-> use `dataclasses.replace(cfg, field=value)` and construct a fresh `MEDSPytorchDataset`
-> around it; direct assignment like `cfg.field = value` raises `FrozenInstanceError`.
-> Immutability protects against silently inconsistent state when a `DataLoader` with
-> `persistent_workers=True` (the default for `num_workers>0` via `Datamodule`) keeps
-> worker-process dataset copies alive across epochs.
+> A `MEDSTorchDataConfig` is freely mutable until you hand it to a `MEDSPytorchDataset`;
+> after that, it's locked against further mutation. This catches the silent-failure case
+> where a post-handoff `cfg.field = value` would fail to propagate into a live dataset (or
+> into worker processes under `persistent_workers=True`, the default from `Datamodule`
+> when `num_workers > 0`). To derive a modified config, use `dataclasses.replace(cfg, field=value)` and construct a fresh `MEDSPytorchDataset` around it — the error message
+> points at the same idiom.
 
 It also provides a convenient property to get the vocab size for the dataset, given by the vocab indices in
 the tensorized metadata. Let's start by building a configuration object for this data and inspect some of its

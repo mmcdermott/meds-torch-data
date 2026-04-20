@@ -233,6 +233,12 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
     def __init__(self, cfg: MEDSTorchDataConfig, split: str):
         super().__init__()
 
+        # Lock the cfg against post-handoff mutation — see `MEDSTorchDataConfig.__setattr__`
+        # for the full rationale. `object.__setattr__` bypasses our own lock hook, which is
+        # the only way to set the sentinel itself. Idempotent: reusing the same cfg across
+        # multiple datasets just re-asserts the same flag.
+        object.__setattr__(cfg, "_handed_off_to_dataset", True)
+
         self.config: MEDSTorchDataConfig = cfg
         self.split: str = split
 
