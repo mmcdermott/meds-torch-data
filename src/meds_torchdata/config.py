@@ -566,6 +566,17 @@ class MEDSTorchDataConfig:
             Traceback (most recent call last):
                 ...
             RuntimeError: Cannot mutate `max_seq_len` on a locked MEDSTorchDataConfig...
+
+            The locked state round-trips through pickle — when `DataLoader(num_workers>0)`
+            pickles the dataset (and its config) into a worker process, the worker inherits
+            the lock. No stealthy mutation channel via pickle.
+
+            >>> import pickle
+            >>> restored = pickle.loads(pickle.dumps(cfg))
+            >>> restored.max_seq_len = 20
+            Traceback (most recent call last):
+                ...
+            RuntimeError: Cannot mutate `max_seq_len` on a locked MEDSTorchDataConfig...
         """
         object.__setattr__(self, "_locked", True)
 
