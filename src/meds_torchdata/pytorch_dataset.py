@@ -318,19 +318,22 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
         # JNRT handle cache — avoids rebuilding the handle object on every `__getitem__`.
         # Keyed by `(shard, frozenset(load_keys))` so a runtime flip of
-        # `config.include_numeric_value` / `include_time_delta` naturally invalidates.
+        # `config.include_numeric_value` / `config.include_time_delta` naturally invalidates.
         # Dropped on pickle (see `__getstate__`) so `DataLoader(num_workers>0)` workers
         # rebuild their own cache rather than trying to serialize a safetensors handle
         # that doesn't round-trip through pickle.
+        #
+        # Maintenance contract: this key assumes the dynamic view returned by
+        # `load_subject_data` is fully determined by `(shard, load_keys)`. If a future
+        # change makes the file path or the loaded view depend on additional config state
+        # (another optional tensor, mode-specific file selection, etc.), the cache key
+        # must expand to match — otherwise stale entries will be served.
         self._jnrt_cache: dict[tuple[str, frozenset[str]], JointNestedRaggedTensorDict] = {}
 
     def __getstate__(self) -> dict:
         state = self.__dict__.copy()
         state["_jnrt_cache"] = {}
         return state
-
-    def __setstate__(self, state: dict) -> None:
-        self.__dict__.update(state)
 
     def _expand_index_for_step_through(self) -> None:
         """Expand `self.index` so that STEP_THROUGH sampling produces one entry per window.
@@ -1175,9 +1178,9 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             True
             >>> sample_pytorch_dataset.config.static_inclusion_mode = StaticInclusionMode.INCLUDE
 
-            The JNRT handle is cached per `(shard, load_keys)` on the dataset instance, so
-            repeated calls that hit the same shard reuse one handle rather than rebuilding
-            the safetensors wrapper each time:
+            The JNRT handle is cached per `(shard, frozenset(load_keys))` on the dataset
+            instance, so repeated calls that hit the same shard reuse one handle rather
+            than rebuilding the safetensors wrapper each time:
 
             >>> cfg = MEDSTorchDataConfig(tensorized_cohort_dir=tensorized_MEDS_dataset, max_seq_len=5)
             >>> fresh = MEDSPytorchDataset(cfg, split="train")
