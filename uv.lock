@@ -858,7 +858,7 @@ requires-dist = [
     { name = "mkdocs-section-index", marker = "extra == 'docs'", specifier = "==0.3.9" },
     { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = "==0.28.2" },
     { name = "mkdocstrings-shell", marker = "extra == 'docs'", specifier = "~=1.0" },
-    { name = "nested-ragged-tensors", specifier = ">=0.2,<0.3" },
+    { name = "nested-ragged-tensors", specifier = ">=0.3,<0.4" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "omegaconf", specifier = ">=2.3" },
     { name = "polars", specifier = ">=1.30,<2" },
@@ -1258,15 +1258,15 @@ wheels = [
 
 [[package]]
 name = "nested-ragged-tensors"
-version = "0.2.0"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "safetensors" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/77/c617064470f8d9e9979d6d46478e097b4530aa4acad6b158760592f083fc/nested_ragged_tensors-0.2.0.tar.gz", hash = "sha256:656a76b7aa104dae62be331dc1bc086bc3e43fe93858ec3e9ab2edaac10dea93", size = 24356901, upload-time = "2026-04-18T11:56:52.472Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ac/8f/d93d1380cbfa89f0c6406636080a8dfc271a374c9aaf82b4e31611bd108e/nested_ragged_tensors-0.3.0.tar.gz", hash = "sha256:eeb0db59981d5bcc67ac1a16231593ef9ac267b5bc64ca311fab7460c7d7eca2", size = 24365067, upload-time = "2026-04-20T21:22:38.229Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d8/10/e7237fe2bcfa939950d05db92d2023a65b70ffb16d814de304cabf234140/nested_ragged_tensors-0.2.0-py3-none-any.whl", hash = "sha256:907f5f753b28893d0a7b6e1b06ecb5fea6ed6e4145bf4caa0938515cb5b562e8", size = 21887, upload-time = "2026-04-18T11:56:50.035Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/5a/e1a90df81cd3ff9440891e8f8ffad29838725fe791c772295e255f25100b/nested_ragged_tensors-0.3.0-py3-none-any.whl", hash = "sha256:0cb2d1dc23fcd9b04c9258625427eb00d1ef0d6d168255814a2e29d28f87aca7", size = 28473, upload-time = "2026-04-20T21:22:35.516Z" },
 ]
 
 [[package]]
