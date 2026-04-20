@@ -51,6 +51,27 @@ class MTDStageExample(StageExample):
 
     @classmethod
     def from_dir(cls, stage_name, scenario_name, example_dir, **schema_updates):
+        """Load an `MTDStageExample` from a scenario directory on disk.
+
+        Expects `out_data.yaml` (required), optionally `in.yaml` and `cfg.yaml`. A
+        non-mapping `cfg.yaml` (list, scalar, etc.) is a user-error — the parent
+        `StageExample` treats `stage_cfg` as a dict, so surface the type mismatch
+        here with a clear message rather than letting the downstream `.items()` call
+        raise a generic `AttributeError`.
+
+        Examples:
+            `yaml_disk` is auto-registered in the doctest namespace by
+            ``yaml_to_disk.pytest_plugin``, so the doctest can use it without importing.
+
+            >>> with yaml_disk({
+            ...     "out_data.yaml": {"data/x.parquet": {"a": [1, 2]}},
+            ...     "cfg.yaml": ["not", "a", "mapping"],
+            ... }) as example_dir:
+            ...     MTDStageExample.from_dir("demo", "default", example_dir)
+            Traceback (most recent call last):
+                ...
+            TypeError: ...cfg.yaml must contain a YAML mapping; got list
+        """
         want_data_fp = example_dir / "out_data.yaml"
         in_fp = example_dir / "in.yaml"
         stage_cfg_fp = example_dir / "cfg.yaml"
@@ -70,9 +91,10 @@ class MTDStageExample(StageExample):
         )
 
     def check_outputs(self, output_dir: Path, is_resolved_dir: bool = False) -> None:
-        if self.want_data is None:
-            return
-
+        # `is_example_dir` already required `out_data.yaml`, and `from_dir` always wires
+        # `want_data` to that file. meds-torch-data has no metadata-only stages, so the
+        # `want_data is None` path inherited from the parent `StageExample` contract is
+        # unreachable here — don't guard for it.
         with yaml_disk(self.want_data) as expected_root:
             # Under pipeline_tester's per-stage validation, `output_dir` is already resolved
             # to `${cohort}/<stage_name>/`, so the leading `data/` segment in expected paths
@@ -106,6 +128,57 @@ class MTDStageExample(StageExample):
 
 
 def _compare(expected_fp: Path, actual_fp: Path, rel: Path, df_check_kwargs: dict) -> None:
+    """Per-file comparison helper for `check_outputs`.
+
+    Dispatches on `expected_fp.suffix`. `.parquet` → `polars.testing.assert_frame_equal`
+    (wrapped in an AssertionError that names the rel-path and shows both frames);
+    `.nrt` → `JointNestedRaggedTensorDict.equals(equal_nan=True)`; anything else
+    raises — the caller is responsible for filtering to allowed suffixes.
+
+    Examples:
+        Matching parquets pass silently:
+
+        >>> import tempfile
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     d = Path(d)
+        ...     pl.DataFrame({"a": [1, 2]}).write_parquet(d / "a.parquet")
+        ...     pl.DataFrame({"a": [1, 2]}).write_parquet(d / "b.parquet")
+        ...     _compare(d / "a.parquet", d / "b.parquet", Path("x.parquet"), {})
+
+        Differing parquets raise with the rel-path in the message:
+
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     d = Path(d)
+        ...     pl.DataFrame({"a": [1, 2, 3]}).write_parquet(d / "a.parquet")
+        ...     pl.DataFrame({"a": [1, 2, 999]}).write_parquet(d / "b.parquet")
+        ...     _compare(d / "a.parquet", d / "b.parquet", Path("shard/0.parquet"), {})
+        Traceback (most recent call last):
+            ...
+        AssertionError: Parquet shard/0.parquet differs...
+
+        NRT mismatches use `equals(equal_nan=True)` and raise similarly:
+
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     d = Path(d)
+        ...     JointNestedRaggedTensorDict({"code": [[1, 2], [3]]}).save(d / "a.nrt")
+        ...     JointNestedRaggedTensorDict({"code": [[1, 2], [999]]}).save(d / "b.nrt")
+        ...     _compare(d / "a.nrt", d / "b.nrt", Path("data/0.nrt"), {})
+        Traceback (most recent call last):
+            ...
+        AssertionError: NRT data/0.nrt differs...
+
+        Any other suffix raises — the `check_outputs` caller already filters to the
+        allowed suffixes, so reaching this branch is a programming error:
+
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     fp = Path(d) / "x.json"
+        ...     _ = fp.write_text("{}")
+        ...     _compare(fp, fp, Path("x.json"), {})
+        Traceback (most recent call last):
+            ...
+        AssertionError: Unsupported output suffix '.json' for x.json.
+        MTDStageExample handles '.parquet' and '.nrt' only.
+    """
     match expected_fp.suffix:
         case ".parquet":
             # YAML can't express polars dtypes (u32 vs i64, f32 vs f64, etc.) and pyarrow's

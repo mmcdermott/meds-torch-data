@@ -313,6 +313,21 @@ def main(cfg: DictConfig):
     Note that you _must_ run several other stages first, pending tokenization mode, including
     `fit_vocabulary_indices` and `aggregate_code_metadata` with the appropriate aggregations. See the
     `stage_configs` for arg options.
+
+    `train_only=True` is not a supported tokenization mode — we need schema + event-seq
+    outputs for every split so `MEDSPytorchDataset(split=...)` can load them:
+
+        >>> from MEDS_transforms.stages import Stage
+        >>> from MEDS_transforms.stages.discovery import get_all_registered_stages
+        >>> stage = get_all_registered_stages()["tokenization"].load()
+        >>> cfg = OmegaConf.create({
+        ...     "stage": "tokenization",
+        ...     "stage_cfg": {"output_dir": "/tmp/x", "train_only": True},
+        ... })
+        >>> stage.main_fn(cfg)
+        Traceback (most recent call last):
+            ...
+        ValueError: train_only=True is not supported for this stage.
     """
 
     logger.info(

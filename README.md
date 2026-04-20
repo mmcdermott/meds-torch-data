@@ -30,6 +30,14 @@
 pip install meds-torch-data
 ```
 
+Optional extras:
+
+- `meds-torch-data[lightning]` — pulls in the `lightning` dep and enables
+    `meds_torchdata.extensions.Datamodule`, a PyTorch Lightning `DataModule` wrapper around `MEDSPytorchDataset`.
+- `meds-torch-data[joblib]` — pulls in `hydra-joblib-launcher`, the [joblib](https://joblib.readthedocs.io/)-based
+    backend for the preprocessing pipeline's `stage_runner_fp=<path>` parallelism (see "Parallel execution" below).
+    Other Hydra launchers (e.g. `slurm`) stay in their own extras, hence the backend-specific name.
+
 ### Step 2: Data Tensorization
 
 > [!WARNING]
@@ -195,6 +203,12 @@ Data processing parameters include:
     sampled window in the dataset's `schema_df` when an index dataframe is used and the sampling strategy is
     deterministic. This functionality is useful for generative applications where the model needs to know what
     the timestamp is at the start of a generation window, for example.
+- `include_numeric_value`: If `False` (defaults to `True`), drop `numeric_value` and
+    `numeric_value_mask` from the collated `MEDSTorchBatch` entirely — the batch surfaces `None` for those
+    fields. The underlying tensors are also skipped at load time via `nested_ragged_tensors`'s
+    `keys=` subset, so code-only models don't pay the per-batch I/O or GPU transfer for data they ignore.
+- `include_time_delta`: If `False` (defaults to `True`), drop `time_delta_days` from the collated batch
+    (surfaced as `None`) and skip it at load time. Useful when the model doesn't consume inter-event timing.
 
 Of these, `seq_sampling_strategy` and `static_inclusion_mode` are restricted, and must be of the
 [`SubsequenceSamplingStrategy`](https://meds-torch-data.readthedocs.io/en/latest/api/meds_torchdata/config/#meds_torchdata.config.SubsequenceSamplingStrategy)
@@ -202,7 +216,11 @@ and
 [`StaticInclusionMode`](https://meds-torch-data.readthedocs.io/en/latest/api/meds_torchdata/config/#meds_torchdata.config.StaticInclusionMode)
 `StrEnum`s, respectively:
 
-- `seq_sampling_strategy`: One of `["random", "to_end", "from_start"]` (defaults to `"random"`).
+- `seq_sampling_strategy`: One of
+    `["random", "balanced_random", "to_end", "from_start", "step_through"]`
+    (defaults to `"random"`). `balanced_random` draws with a flat per-event inclusion probability;
+    `step_through` walks deterministic non-overlapping (or controllably-overlapping) windows across the
+    sequence — see `step_through_stride` / `step_through_overlap`.
 - `static_inclusion_mode`: One of `["include", "prepend", "omit"]` (defaults to `"include"`).
 
 File path parameters include:
@@ -1189,6 +1207,21 @@ The `MTD_preprocess` command runs the following pre-processing stages:
 >     You should perform these steps on the raw MEDS data _prior to running the tensorization command_. This
 >     ensures that the data is modified as you desire in an efficient, transparent way and that the tensorization
 >     step works with data in its final format to avoid any issues with discrepancies in code vocabulary, etc.
+
+> [!NOTE]
+> **Parallel execution.** `MTD_preprocess` runs serially by default. To parallelize, point it at a
+> MEDS-Transforms stage-runner YAML via `stage_runner_fp=<path>`:
+>
+> ```yaml
+> # stage_runner.yaml
+> parallelize:
+>   n_workers: 4
+>   launcher: joblib
+> ```
+>
+> Then: `MTD_preprocess MEDS_dataset_dir=... output_dir=... stage_runner_fp=stage_runner.yaml`. The
+> `joblib` launcher requires the optional `meds-torch-data[joblib]` extra
+> (`hydra-joblib-launcher`). The `N_WORKERS` env var from pre-0.8 releases is no longer consulted.
 
 ### Advanced features
 
