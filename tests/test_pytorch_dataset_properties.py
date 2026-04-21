@@ -1,3 +1,4 @@
+import dataclasses
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -196,8 +197,7 @@ def test_get_task_seq_bounds_and_labels_unlabeled(data):
 @given(st.data())
 @settings(max_examples=25, deadline=None)
 def test_schema_df_last_observed(sample_dataset_config_with_index, data):
-    cfg = sample_dataset_config_with_index
-    cfg.include_window_last_observed_in_schema = True
+    cfg = dataclasses.replace(sample_dataset_config_with_index, include_window_last_observed_in_schema=True)
     dataset = MEDSPytorchDataset(cfg, split="train")
 
     idx = data.draw(st.integers(min_value=0, max_value=len(dataset) - 1))
@@ -244,9 +244,11 @@ def test_get_task_seq_bounds_and_labels_semantic(data):
 
 
 def test_getitem_consistency(sample_dataset_config_with_index):
-    cfg = sample_dataset_config_with_index
-    cfg.include_window_last_observed_in_schema = True
-    cfg.batch_mode = BatchMode.SEM
+    cfg = dataclasses.replace(
+        sample_dataset_config_with_index,
+        include_window_last_observed_in_schema=True,
+        batch_mode=BatchMode.SEM,
+    )
     dataset = MEDSPytorchDataset(cfg, split="train")
 
     for idx in range(len(dataset)):

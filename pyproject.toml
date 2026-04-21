@@ -22,7 +22,7 @@ classifiers = [
 dependencies = [
     "pytest",  # re-exported as a pytest plugin via `[project.entry-points.pytest11]`
     "polars>=1.30,<2",
-    "nested_ragged_tensors>=0.2,<0.3",
+    "nested_ragged_tensors>=0.3,<0.4",
     "numpy>=1.26,<3",
     "torch>=2.0",
     "meds>=0.4,<0.5",

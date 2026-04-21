@@ -26,8 +26,10 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
     Key design principles:
       1. The class will store an `index` variable that specifies what is the valid range of data to consider
          for any given subject in the dataset corresponding to an integer index passed to `__getitem__`.
-      2. Data will only be loaded for subjects on an as-needed basis, and will not be cached, to minimize
-         memory usage during normal operation.
+      2. Subject tensor data is loaded on an as-needed basis and is not cached, to minimize memory
+         usage during normal operation. (JNRT *handles* are memoized per `(shard, load_keys)` on
+         `self._jnrt_cache` to avoid rebuilding the handle object on every `__getitem__` — this
+         is a Python-level wrapper cache, not a cache of the underlying tensor bytes.)
       3. As much work as possible should be relegated to separate dataset pre-processing (resulting in files
          stored on disk) rather than this class to streamline operation.
       4. The primary input to this class in terms of data is a pre-processed set of "schema files" and "nested
@@ -315,6 +317,31 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         self.step_through_meas_ends: list[int] | None = None
         if self.config.seq_sampling_strategy == SubsequenceSamplingStrategy.STEP_THROUGH:
             self._expand_index_for_step_through()
+
+        # JNRT handle cache — avoids rebuilding the handle object on every `__getitem__`.
+        # Keyed by `(shard, frozenset(load_keys))` so a runtime flip of
+        # `config.include_numeric_value` / `config.include_time_delta` naturally invalidates.
+        # Dropped on pickle (see `__getstate__`) so `DataLoader(num_workers>0)` workers
+        # rebuild their own cache rather than trying to serialize a safetensors handle
+        # that doesn't round-trip through pickle.
+        #
+        # Maintenance contract: this key assumes the dynamic view returned by
+        # `load_subject_data` is fully determined by `(shard, load_keys)`. If a future
+        # change makes the file path or the loaded view depend on additional config state
+        # (another optional tensor, mode-specific file selection, etc.), the cache key
+        # must expand to match — otherwise stale entries will be served.
+        self._jnrt_cache: dict[tuple[str, frozenset[str]], JointNestedRaggedTensorDict] = {}
+
+        # Lock the cfg only after init has fully succeeded — if any of the above raises
+        # (missing schema, column mismatch, etc.), the caller keeps a mutable cfg and can
+        # retry or modify without having to `unlock()` first. See `MEDSTorchDataConfig.lock()`
+        # / `unlock()` for the full contract and escape hatch.
+        cfg.lock()
+
+    def __getstate__(self) -> dict:
+        state = self.__dict__.copy()
+        state["_jnrt_cache"] = {}
+        return state
 
     def _expand_index_for_step_through(self) -> None:
         """Expand `self.index` so that STEP_THROUGH sampling produces one entry per window.
@@ -1151,17 +1178,47 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
             In `StaticInclusionMode.OMIT` the static slot is returned as `None` rather than an
             empty `StaticData` — the static columns are never loaded from disk in that mode, so
-            there is genuinely nothing to surface:
+            there is genuinely nothing to surface. `sample_pytorch_dataset.config` is locked
+            (see `MEDSTorchDataConfig.lock()`), so swap in a modified config by deriving a new
+            one with `dataclasses.replace` and constructing a fresh dataset:
 
-            >>> sample_pytorch_dataset.config.static_inclusion_mode = StaticInclusionMode.OMIT
-            >>> _, static_data = sample_pytorch_dataset.load_subject_data(68729, 0, 3)
+            >>> import dataclasses
+            >>> omit_cfg = dataclasses.replace(
+            ...     sample_pytorch_dataset.config, static_inclusion_mode=StaticInclusionMode.OMIT
+            ... )
+            >>> omit_pyd = MEDSPytorchDataset(omit_cfg, split="train")
+            >>> _, static_data = omit_pyd.load_subject_data(68729, 0, 3)
             >>> static_data is None
             True
-            >>> sample_pytorch_dataset.config.static_inclusion_mode = StaticInclusionMode.INCLUDE
+
+            The JNRT handle is cached per `(shard, frozenset(load_keys))` on the dataset
+            instance, so repeated calls that hit the same shard reuse one handle rather
+            than rebuilding the safetensors wrapper each time:
+
+            >>> cfg = MEDSTorchDataConfig(tensorized_cohort_dir=tensorized_MEDS_dataset, max_seq_len=5)
+            >>> fresh = MEDSPytorchDataset(cfg, split="train")
+            >>> fresh._jnrt_cache
+            {}
+            >>> _ = fresh.load_subject_data(239684, 0, 3)
+            >>> len(fresh._jnrt_cache)
+            1
+            >>> _ = fresh.load_subject_data(239684, 0, 3)  # same shard, cache reused
+            >>> len(fresh._jnrt_cache)
+            1
+
+            Pickling the dataset (as `DataLoader(num_workers>0)` does when spawning workers)
+            drops the cache so each worker rebuilds its own handles — safetensors file
+            handles don't round-trip cleanly through pickle and would break otherwise:
+
+            >>> import pickle
+            >>> roundtripped = pickle.loads(pickle.dumps(fresh))
+            >>> roundtripped._jnrt_cache
+            {}
+            >>> _ = roundtripped.load_subject_data(239684, 0, 3)
+            >>> len(roundtripped._jnrt_cache)
+            1
         """
         shard, subject_idx = self.subj_locations[subject_id]
-
-        dynamic_data_fp = self.config.tensorized_cohort_dir / "data" / f"{shard}.nrt"
 
         # Only load the tensors downstream collation will actually use — `keys=` (nested_ragged_tensors
         # >= 0.2) skips the unloaded tensors' disk reads entirely. `code` is always required; the
@@ -1171,9 +1228,13 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             load_keys.add("numeric_value")
         if self.config.include_time_delta:
             load_keys.add("time_delta_days")
-        subject_dynamic_data = JointNestedRaggedTensorDict(tensors_fp=dynamic_data_fp, keys=load_keys)[
-            subject_idx, st:end
-        ]
+        cache_key = (shard, frozenset(load_keys))
+        jnrt = self._jnrt_cache.get(cache_key)
+        if jnrt is None:
+            dynamic_data_fp = self.config.tensorized_cohort_dir / "data" / f"{shard}.nrt"
+            jnrt = JointNestedRaggedTensorDict(tensors_fp=dynamic_data_fp, keys=load_keys)
+            self._jnrt_cache[cache_key] = jnrt
+        subject_dynamic_data = jnrt[subject_idx, st:end]
 
         # When `static_inclusion_mode == OMIT` the static columns were not loaded from the
         # schema parquet (see issue #45 — skipping them at `pl.read_parquet(columns=...)`
@@ -1300,9 +1361,16 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             you can set it to "left" for generative use cases. To show this, we'll also set the sampling
             strategy to `SubsequenceSamplingStrategy.TO_END` so that things are consistent.
 
+            >>> import dataclasses
             >>> from meds_torchdata.types import SubsequenceSamplingStrategy
-            >>> sample_pytorch_dataset.config.padding_side = "left"
-            >>> sample_pytorch_dataset.config.seq_sampling_strategy = SubsequenceSamplingStrategy.TO_END
+            >>> sample_pytorch_dataset = MEDSPytorchDataset(
+            ...     dataclasses.replace(
+            ...         sample_pytorch_dataset.config,
+            ...         padding_side="left",
+            ...         seq_sampling_strategy=SubsequenceSamplingStrategy.TO_END,
+            ...     ),
+            ...     split="train",
+            ... )
             >>> raw_batch = [sample_pytorch_dataset[i] for i in range(len(sample_pytorch_dataset))]
             >>> print(sample_pytorch_dataset.collate(raw_batch))
             MEDSTorchBatch:
@@ -1356,7 +1424,10 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             │ │ │ │  [False,  True],
             │ │ │ │  [False,  True],
             │ │ │ │  [False,  True]]
-            >>> sample_pytorch_dataset.config.padding_side = "right"
+            >>> sample_pytorch_dataset = MEDSPytorchDataset(
+            ...     dataclasses.replace(sample_pytorch_dataset.config, padding_side="right"),
+            ...     split="train",
+            ... )
             >>> raw_batch = [sample_pytorch_dataset[i] for i in range(len(sample_pytorch_dataset))]
             >>> print(sample_pytorch_dataset.collate(raw_batch))
             MEDSTorchBatch:
@@ -1413,8 +1484,14 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
             Static data can also be omitted if set in the config.
 
-            >>> sample_pytorch_dataset.config.static_inclusion_mode = StaticInclusionMode.OMIT
-            >>> sample_pytorch_dataset.config.seq_sampling_strategy = SubsequenceSamplingStrategy.RANDOM
+            >>> sample_pytorch_dataset = MEDSPytorchDataset(
+            ...     dataclasses.replace(
+            ...         sample_pytorch_dataset.config,
+            ...         static_inclusion_mode=StaticInclusionMode.OMIT,
+            ...         seq_sampling_strategy=SubsequenceSamplingStrategy.RANDOM,
+            ...     ),
+            ...     split="train",
+            ... )
             >>> raw_batch = [sample_pytorch_dataset[2], sample_pytorch_dataset[3]]
             >>> print(sample_pytorch_dataset.collate(raw_batch))
             MEDSTorchBatch:
@@ -1445,8 +1522,14 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
             Static data can also be prepended to the dynamic data.
 
-            >>> sample_pytorch_dataset.config.static_inclusion_mode = StaticInclusionMode.PREPEND
-            >>> sample_pytorch_dataset.config.seq_sampling_strategy = SubsequenceSamplingStrategy.TO_END
+            >>> sample_pytorch_dataset = MEDSPytorchDataset(
+            ...     dataclasses.replace(
+            ...         sample_pytorch_dataset.config,
+            ...         static_inclusion_mode=StaticInclusionMode.PREPEND,
+            ...         seq_sampling_strategy=SubsequenceSamplingStrategy.TO_END,
+            ...     ),
+            ...     split="train",
+            ... )
             >>> raw_batch = [sample_pytorch_dataset[2], sample_pytorch_dataset[3]]
             >>> print(sample_pytorch_dataset.collate(raw_batch))
             MEDSTorchBatch:
@@ -1480,8 +1563,14 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
             If the batch mode is SEM, the event mask will also be included and the output shape will differ:
 
-            >>> sample_pytorch_dataset.config.batch_mode = "SEM"
-            >>> sample_pytorch_dataset.config.static_inclusion_mode = StaticInclusionMode.OMIT
+            >>> sample_pytorch_dataset = MEDSPytorchDataset(
+            ...     dataclasses.replace(
+            ...         sample_pytorch_dataset.config,
+            ...         batch_mode="SEM",
+            ...         static_inclusion_mode=StaticInclusionMode.OMIT,
+            ...     ),
+            ...     split="train",
+            ... )
             >>> raw_batch = [sample_pytorch_dataset[2], sample_pytorch_dataset[3]]
             >>> print(sample_pytorch_dataset.collate(raw_batch))
             MEDSTorchBatch:
@@ -1531,7 +1620,11 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
             Padding side changes work in this mode as well.
 
-            >>> sample_pytorch_dataset.config.padding_side = "left"
+            >>> sample_pytorch_dataset = MEDSPytorchDataset(
+            ...     dataclasses.replace(sample_pytorch_dataset.config, padding_side="left"),
+            ...     split="train",
+            ... )
+            >>> raw_batch = [sample_pytorch_dataset[2], sample_pytorch_dataset[3]]
             >>> print(sample_pytorch_dataset.collate(raw_batch))
             MEDSTorchBatch:
             │ Mode: Subject-Event-Measurement (SEM)
@@ -1580,10 +1673,16 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
             In this mode, though redundant, the static mask will still be present if static data is prepended
 
-            >>> sample_pytorch_dataset.config.batch_mode = "SEM"
-            >>> sample_pytorch_dataset.config.padding_side = "right"
-            >>> sample_pytorch_dataset.config.static_inclusion_mode = StaticInclusionMode.PREPEND
-            >>> sample_pytorch_dataset.config.seq_sampling_strategy = SubsequenceSamplingStrategy.TO_END
+            >>> sample_pytorch_dataset = MEDSPytorchDataset(
+            ...     dataclasses.replace(
+            ...         sample_pytorch_dataset.config,
+            ...         batch_mode="SEM",
+            ...         padding_side="right",
+            ...         static_inclusion_mode=StaticInclusionMode.PREPEND,
+            ...         seq_sampling_strategy=SubsequenceSamplingStrategy.TO_END,
+            ...     ),
+            ...     split="train",
+            ... )
             >>> raw_batch = [sample_pytorch_dataset[2], sample_pytorch_dataset[3]]
             >>> print(sample_pytorch_dataset.collate(raw_batch))
             MEDSTorchBatch:
@@ -1647,21 +1746,28 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
             Baseline — both flags on:
 
-            >>> sample_pytorch_dataset.config.batch_mode = "SM"
-            >>> sample_pytorch_dataset.config.padding_side = "right"
-            >>> sample_pytorch_dataset.config.static_inclusion_mode = StaticInclusionMode.PREPEND
-            >>> sample_pytorch_dataset.config.seq_sampling_strategy = SubsequenceSamplingStrategy.TO_END
-            >>> sample_pytorch_dataset.config.include_numeric_value = True
-            >>> sample_pytorch_dataset.config.include_time_delta = True
-            >>> raw_batch = [sample_pytorch_dataset[2], sample_pytorch_dataset[3]]
-            >>> batch = sample_pytorch_dataset.collate(raw_batch)
+            >>> base_cfg = dataclasses.replace(
+            ...     sample_pytorch_dataset.config,
+            ...     batch_mode="SM",
+            ...     padding_side="right",
+            ...     static_inclusion_mode=StaticInclusionMode.PREPEND,
+            ...     seq_sampling_strategy=SubsequenceSamplingStrategy.TO_END,
+            ...     include_numeric_value=True,
+            ...     include_time_delta=True,
+            ... )
+            >>> pyd = MEDSPytorchDataset(base_cfg, split="train")
+            >>> raw_batch = [pyd[2], pyd[3]]
+            >>> batch = pyd.collate(raw_batch)
             >>> (batch.numeric_value is None, batch.numeric_value_mask is None, batch.time_delta_days is None)
             (False, False, False)
 
             `include_numeric_value=False` — numeric_value *and* its mask vanish:
 
-            >>> sample_pytorch_dataset.config.include_numeric_value = False
-            >>> batch = sample_pytorch_dataset.collate(raw_batch)
+            >>> pyd = MEDSPytorchDataset(
+            ...     dataclasses.replace(base_cfg, include_numeric_value=False), split="train"
+            ... )
+            >>> raw_batch = [pyd[2], pyd[3]]
+            >>> batch = pyd.collate(raw_batch)
             >>> (batch.numeric_value is None, batch.numeric_value_mask is None, batch.time_delta_days is None)
             (True, True, False)
 
@@ -1670,25 +1776,26 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             silently disappears when that flag goes off; the current implementation reads
             the axis from `code` (always present), so the mask still has the right shape.
 
-            >>> sample_pytorch_dataset.config.include_numeric_value = True
-            >>> sample_pytorch_dataset.config.include_time_delta = False
-            >>> batch = sample_pytorch_dataset.collate(raw_batch)
+            >>> pyd = MEDSPytorchDataset(
+            ...     dataclasses.replace(base_cfg, include_time_delta=False), split="train"
+            ... )
+            >>> raw_batch = [pyd[2], pyd[3]]
+            >>> batch = pyd.collate(raw_batch)
             >>> (batch.numeric_value is None, batch.time_delta_days is None,
             ...  batch.static_mask.shape == batch.code.shape)
             (False, True, True)
 
             Both off together:
 
-            >>> sample_pytorch_dataset.config.include_numeric_value = False
-            >>> batch = sample_pytorch_dataset.collate(raw_batch)
+            >>> pyd = MEDSPytorchDataset(
+            ...     dataclasses.replace(base_cfg, include_numeric_value=False, include_time_delta=False),
+            ...     split="train",
+            ... )
+            >>> raw_batch = [pyd[2], pyd[3]]
+            >>> batch = pyd.collate(raw_batch)
             >>> (batch.numeric_value is None, batch.time_delta_days is None,
             ...  batch.static_mask.shape == batch.code.shape)
             (True, True, True)
-
-            Restore defaults so later doctests see both fields:
-
-            >>> sample_pytorch_dataset.config.include_numeric_value = True
-            >>> sample_pytorch_dataset.config.include_time_delta = True
         """
 
         data = JointNestedRaggedTensorDict.vstack([item["dynamic"] for item in batch])
@@ -1766,10 +1873,17 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             torch.utils.data.DataLoader: A DataLoader object for this dataset.
 
         Examples:
+            >>> import dataclasses
             >>> from meds_torchdata.types import SubsequenceSamplingStrategy
-            >>> sample_pytorch_dataset.config.static_inclusion_mode = StaticInclusionMode.INCLUDE
-            >>> sample_pytorch_dataset.config.seq_sampling_strategy = SubsequenceSamplingStrategy.TO_END
-            >>> sample_pytorch_dataset.config.batch_mode = "SM"
+            >>> sample_pytorch_dataset = MEDSPytorchDataset(
+            ...     dataclasses.replace(
+            ...         sample_pytorch_dataset.config,
+            ...         static_inclusion_mode=StaticInclusionMode.INCLUDE,
+            ...         seq_sampling_strategy=SubsequenceSamplingStrategy.TO_END,
+            ...         batch_mode="SM",
+            ...     ),
+            ...     split="train",
+            ... )
             >>> _ = torch.manual_seed(0)
             >>> torch.use_deterministic_algorithms(True)
             >>> DL = sample_pytorch_dataset.get_dataloader(batch_size=2, shuffle=False)
