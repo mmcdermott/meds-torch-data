@@ -195,6 +195,10 @@ Data processing parameters include:
 - `max_seq_len`: The maximum sequence length to use for the model.
 - `seq_sampling_strategy`: The strategy to use when sampling sub-sequences to return for input sequences
     longer than `max_seq_len`.
+- `subsequence_sampling_seed`: Optional base seed for reproducible `random` and `balanced_random`
+    sampling. Samples are deterministic for a given `(seed, epoch, dataset index)` tuple; call
+    `dataset.set_epoch(epoch)` (or `datamodule.set_epoch(epoch)`) between epochs. The default `None`
+    preserves non-deterministic sampling.
 - `static_inclusion_mode`: The mode to use when including static data in the output.
 - `batch_mode`: Whether to return sequences at the _measurement_ level (`"SM"`) or the _event_ level
     (`"SEM"`). Note that here, we use "_measurement_" to refer to a single row (observation) in the raw MEDS
@@ -661,6 +665,23 @@ numeric_value
 .
 time_delta_days
 [0.         0.01373843 0.         0.01888889 0.        ]
+
+```
+
+For reproducible stochastic sampling through normal `dataset[idx]` access, set
+`subsequence_sampling_seed` and update the epoch explicitly. The sample for a given seed,
+epoch, and dataset index is independent of DataLoader worker assignment:
+
+```python
+>>> reproducible_cfg = dataclasses.replace(pyd.config, subsequence_sampling_seed=42)
+>>> reproducible_pyd = MEDSPytorchDataset(reproducible_cfg, split="train")
+>>> reproducible_pyd.set_epoch(0)
+>>> first = reproducible_pyd[1]["dynamic"].to_dense()["code"]
+>>> bool((first == reproducible_pyd[1]["dynamic"].to_dense()["code"]).all())
+True
+>>> _ = reproducible_pyd.set_epoch(1)  # permits a different, reproducible draw
+>>> reproducible_pyd.epoch
+1
 
 ```
 

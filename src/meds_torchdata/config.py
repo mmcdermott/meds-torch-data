@@ -37,6 +37,11 @@ class MEDSTorchDataConfig:
             `SubsequenceSamplingStrategy.{RANDOM, BALANCED_RANDOM, TO_END, FROM_START,
             STEP_THROUGH}`. Task-mode datasets (`task_labels_dir` set) are restricted to
             `TO_END`.
+        subsequence_sampling_seed: Optional base seed for reproducible stochastic
+            subsequence sampling. When set, samples are deterministic for a given
+            `(subsequence_sampling_seed, epoch, dataset index)` tuple. Use
+            `MEDSPytorchDataset.set_epoch` to vary samples between epochs. When `None`,
+            random sampling retains its historical non-deterministic behavior.
         padding_side: Which side of short sequences to pad when collating into a batch
             (`LEFT` or `RIGHT`). Defaults to `RIGHT`; set to `LEFT` for autoregressive
             generation models.
@@ -165,6 +170,13 @@ class MEDSTorchDataConfig:
             ...
         ValueError: Invalid static inclusion mode: foobar
 
+        Sampling seeds must fit the non-negative range shared by NumPy and PyTorch generators:
+
+        >>> MEDSTorchDataConfig(tensorized_cohort_dir=".", max_seq_len=3, subsequence_sampling_seed=-1)
+        Traceback (most recent call last):
+            ...
+        ValueError: subsequence_sampling_seed must be an integer in [0, 2**63) or None; got -1.
+
         STEP_THROUGH sampling requires exactly one of ``step_through_stride`` (elements to
         advance between consecutive windows) or ``step_through_overlap`` (elements consecutive
         windows should share). Both are in the same unit as ``max_seq_len`` — events in SEM
@@ -257,6 +269,7 @@ class MEDSTorchDataConfig:
     # Sequence lengths and padding
     max_seq_len: int
     seq_sampling_strategy: SubsequenceSamplingStrategy = SubsequenceSamplingStrategy.RANDOM
+    subsequence_sampling_seed: int | None = None
     padding_side: PaddingSide = PaddingSide.RIGHT
 
     # Static Data
@@ -317,6 +330,7 @@ class MEDSTorchDataConfig:
                        node={'tensorized_cohort_dir': '???',
                              'max_seq_len': '???',
                              'seq_sampling_strategy': <SubsequenceSamplingStrategy.RANDOM: 'random'>,
+                             'subsequence_sampling_seed': None,
                              'padding_side': <PaddingSide.RIGHT: 'right'>,
                              'static_inclusion_mode': <StaticInclusionMode.INCLUDE: 'include'>,
                              'task_labels_dir': None,
@@ -345,6 +359,7 @@ class MEDSTorchDataConfig:
             {'tensorized_cohort_dir': '/tmp/tmp...',
              'max_seq_len': 10,
              'seq_sampling_strategy': <SubsequenceSamplingStrategy.RANDOM: 'random'>,
+             'subsequence_sampling_seed': None,
              'padding_side': <PaddingSide.RIGHT: 'right'>,
              'static_inclusion_mode': <StaticInclusionMode.INCLUDE: 'include'>,
              'task_labels_dir': None,
@@ -361,6 +376,7 @@ class MEDSTorchDataConfig:
             MEDSTorchDataConfig(tensorized_cohort_dir=PosixPath('/tmp/tmp...'),
                                 max_seq_len=10,
                                 seq_sampling_strategy=<SubsequenceSamplingStrategy.RANDOM: 'random'>,
+                                subsequence_sampling_seed=None,
                                 padding_side=<PaddingSide.RIGHT: 'right'>,
                                 static_inclusion_mode=<StaticInclusionMode.INCLUDE: 'include'>,
                                 task_labels_dir=None,
@@ -402,6 +418,7 @@ class MEDSTorchDataConfig:
             MEDSTorchDataConfig(tensorized_cohort_dir=PosixPath('/tmp/tmp...'),
                                 max_seq_len=10,
                                 seq_sampling_strategy=<SubsequenceSamplingStrategy.TO_END: 'to_end'>,
+                                subsequence_sampling_seed=None,
                                 padding_side=<PaddingSide.RIGHT: 'right'>,
                                 static_inclusion_mode=<StaticInclusionMode.INCLUDE: 'include'>,
                                 task_labels_dir=None,
@@ -422,6 +439,7 @@ class MEDSTorchDataConfig:
                        node={'tensorized_cohort_dir': '???',
                              'max_seq_len': '???',
                              'seq_sampling_strategy': <SubsequenceSamplingStrategy.RANDOM: 'random'>,
+                             'subsequence_sampling_seed': None,
                              'padding_side': <PaddingSide.RIGHT: 'right'>,
                              'static_inclusion_mode': <StaticInclusionMode.INCLUDE: 'include'>,
                              'task_labels_dir': None,
@@ -475,6 +493,17 @@ class MEDSTorchDataConfig:
                 pass
             case _:
                 raise ValueError(f"Invalid subsequence sampling strategy: {self.seq_sampling_strategy}")
+
+        if self.subsequence_sampling_seed is not None and (
+            isinstance(self.subsequence_sampling_seed, bool)
+            or not isinstance(self.subsequence_sampling_seed, int)
+            or self.subsequence_sampling_seed < 0
+            or self.subsequence_sampling_seed >= 2**63
+        ):
+            raise ValueError(
+                "subsequence_sampling_seed must be an integer in [0, 2**63) or None; "
+                f"got {self.subsequence_sampling_seed!r}."
+            )
 
         if self.task_labels_dir is not None:
             self.task_labels_dir = Path(self.task_labels_dir)

@@ -235,6 +235,9 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
 
         self.config: MEDSTorchDataConfig = cfg
         self.split: str = split
+        # A shared tensor lets persistent DataLoader worker copies observe epoch updates
+        # made by the parent process between iterations.
+        self._epoch = torch.zeros((), dtype=torch.int64).share_memory_()
 
         logger.info("Reading subject schema and static data")
 
@@ -944,6 +947,25 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         return len(self.index)
 
     @property
+    def epoch(self) -> int:
+        """Return the epoch used to derive deterministic subsequence sampling seeds."""
+        return int(self._epoch.item())
+
+    def set_epoch(self, epoch: int) -> None:
+        """Set the epoch used for reproducible stochastic subsequence sampling.
+
+        Args:
+            epoch: Non-negative epoch number. Dataset worker copies observe this value,
+                including workers kept alive by ``persistent_workers=True``.
+
+        Raises:
+            ValueError: If ``epoch`` is not a non-negative integer.
+        """
+        if isinstance(epoch, bool) or not isinstance(epoch, int) or not 0 <= epoch < 2**63:
+            raise ValueError(f"epoch must be an integer in [0, 2**63); got {epoch!r}.")
+        self._epoch.fill_(epoch)
+
+    @property
     def has_task_index(self) -> bool:
         """Returns whether the dataset has a task index specified.
 
@@ -986,9 +1008,16 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             A dictionary containing the static code, static numeric value, dynamic data, and task label (if
             present) for the specified subject.
         """
-        return self._seeded_getitem(idx)
+        seed = self.config.subsequence_sampling_seed
+        if seed is None:
+            return self._seeded_getitem(idx)
 
-    def _seeded_getitem(self, idx: int, seed: int | None = None) -> dict[str, torch.Tensor]:
+        rng = np.random.default_rng(np.random.SeedSequence([seed, self.epoch, idx]))
+        return self._seeded_getitem(idx, seed=rng)
+
+    def _seeded_getitem(
+        self, idx: int, seed: int | np.random.Generator | None = None
+    ) -> dict[str, torch.Tensor]:
         """Retrieve a single data point from the dataset with a specified random seed.
 
         This is a wrapper around the core item-retrieval logic that allows for deterministic subsequence
