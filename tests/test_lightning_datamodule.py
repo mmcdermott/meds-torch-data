@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import dataclasses
 from typing import TYPE_CHECKING
 
 import pytest
+import torch
 
 pytestmark = pytest.mark.lightning
 
@@ -29,6 +31,25 @@ def test_lightning_datamodule(sample_lightning_datamodule: Datamodule):
         sample_lightning_datamodule.test_dataloader()
     except Exception as e:
         raise AssertionError(f"Failed to create dataloaders: {e}") from e
+
+
+def test_seeded_datamodules_reproduce_shuffle_order_and_propagate_epoch(sample_dataset_config):
+    from meds_torchdata.extensions import Datamodule
+
+    cfg = dataclasses.replace(sample_dataset_config, subsequence_sampling_seed=42)
+    first = Datamodule(config=cfg, batch_size=2)
+    second = Datamodule(config=dataclasses.replace(cfg), batch_size=2)
+
+    first_order = torch.randperm(len(first.train_dataset), generator=first.train_dataloader_generator)
+    second_order = torch.randperm(len(second.train_dataset), generator=second.train_dataloader_generator)
+    torch.testing.assert_close(first_order, second_order)
+
+    first.set_epoch(3)
+    assert first.train_dataset.epoch == 3
+
+    third = Datamodule(config=dataclasses.replace(cfg), batch_size=2)
+    third.set_epoch(3)
+    assert third.train_dataset.epoch == 3
 
 
 def test_lightning_datamodule_with_task(

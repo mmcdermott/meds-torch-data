@@ -3,6 +3,7 @@ from functools import cached_property
 from typing import Generic, TypeVar, cast
 
 import lightning as L
+import torch
 from hydra.utils import get_class
 from meds import held_out_split, train_split, tuning_split
 from torch.utils.data import DataLoader
@@ -178,6 +179,7 @@ class Datamodule(L.LightningDataModule, Generic[DatasetT]):
         self.pin_memory = pin_memory
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor
+        self._epoch = 0
 
         self.save_hyperparameters(
             {
@@ -214,21 +216,45 @@ class Datamodule(L.LightningDataModule, Generic[DatasetT]):
 
     @cached_property
     def train_dataset(self) -> DatasetT:
-        return self.data_class(self.config, split=train_split)
+        dataset = self.data_class(self.config, split=train_split)
+        dataset.set_epoch(self._epoch)
+        return dataset
 
     @cached_property
     def val_dataset(self) -> DatasetT:
-        return self.data_class(self.config, split=tuning_split)
+        dataset = self.data_class(self.config, split=tuning_split)
+        dataset.set_epoch(self._epoch)
+        return dataset
 
     @cached_property
     def test_dataset(self) -> DatasetT:
-        return self.data_class(self.config, split=held_out_split)
+        dataset = self.data_class(self.config, split=held_out_split)
+        dataset.set_epoch(self._epoch)
+        return dataset
+
+    @cached_property
+    def train_dataloader_generator(self) -> torch.Generator | None:
+        """Return a dedicated seeded generator for reproducible training order."""
+        seed = self.config.subsequence_sampling_seed
+        return None if seed is None else torch.Generator().manual_seed(seed)
+
+    def set_epoch(self, epoch: int) -> None:
+        """Set the sampling epoch for current and subsequently constructed datasets."""
+        if isinstance(epoch, bool) or not isinstance(epoch, int) or not 0 <= epoch < 2**63:
+            raise ValueError(f"epoch must be an integer in [0, 2**63); got {epoch!r}.")
+        self._epoch = epoch
+        for dataset_name in ("train_dataset", "val_dataset", "test_dataset"):
+            if dataset_name in self.__dict__:
+                getattr(self, dataset_name).set_epoch(epoch)
 
     def __dataloader(self, dataset, **kwargs) -> DataLoader:
         return DataLoader(dataset, collate_fn=dataset.collate, **self.shared_dataloader_kwargs, **kwargs)
 
     def train_dataloader(self):
-        return self.__dataloader(self.train_dataset, shuffle=True)
+        kwargs = {"shuffle": True}
+        if self.train_dataloader_generator is not None:
+            kwargs["generator"] = self.train_dataloader_generator
+        return self.__dataloader(self.train_dataset, **kwargs)
 
     def val_dataloader(self):
         return self.__dataloader(self.val_dataset, shuffle=False)
