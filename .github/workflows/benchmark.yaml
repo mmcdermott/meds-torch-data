@@ -23,7 +23,10 @@ jobs:
         run: |
           uv run pytest benchmark/run.py
 
+      # Pull requests still run the benchmark above, but fork PR tokens cannot
+      # write to the upstream gh-pages branch. Publish only from trusted main pushes.
       - name: Store benchmark result
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: Benchmark
