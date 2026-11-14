@@ -109,9 +109,8 @@ class MEDSTorchDataConfig:
             set it also carries `age_bin` (`1..n_age_bins` at dynamic positions with known ages, 0
             elsewhere). These are event-level (`[batch_size, n_events]`) in SEM mode and measurement-level
             in SM mode, so a model can add an age-dependent embedding at every position. Defaults to False.
-
-        Age features need the subject `birth_time`s and training-set age statistics written by
-        `MTD_preprocess` (see its `birth_code_regex` option and the `fit_time_derived_stats` stage).
+            All age features need the subject `birth_time`s and training-set age statistics written by
+            `MTD_preprocess` (see its `birth_code_regex` option and the `fit_time_derived_stats` stage).
 
     Raises:
         FileNotFoundError: If the task_labels_dir or the tensorized_cohort_dir is not a valid directory.

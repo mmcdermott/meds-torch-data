@@ -18,6 +18,7 @@ actual output.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -96,6 +97,23 @@ class MTDStageExample(StageExample):
             in_data=in_fp if in_fp.is_file() else None,
             stage_cfg=stage_cfg,
         )
+
+    def render_content(self, example_dir: Path | None = None) -> list[str]:
+        """Render this example for the stage docs, handling metadata-only (`want_metadata`) specs.
+
+        Upstream renders a `Path`-valued `want_data` as a YAML block but assumes `want_metadata` is a
+        DataFrame, so metadata-only examples are rendered through the `want_data` path.
+
+        Examples:
+            >>> with yaml_disk({"out_data.yaml": {"metadata/x.parquet": {"a": [1]}}}) as d:
+            ...     example = MTDStageExample.from_dir("demo", "default", d)
+            ...     print(any("metadata/x.parquet" in line for line in example.render_content()))
+            True
+        """
+        if isinstance(self.want_metadata, Path):
+            as_data = dataclasses.replace(self, want_data=self.want_metadata, want_metadata=None)
+            return StageExample.render_content(as_data, example_dir)
+        return super().render_content(example_dir)
 
     def check_outputs(self, output_dir: Path, is_resolved_dir: bool = False) -> None:
         # `is_example_dir` already required `out_data.yaml`, and `from_dir` always wires
