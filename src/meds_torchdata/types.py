@@ -214,6 +214,30 @@ class StaticInclusionMode(StrEnum):
     OMIT = "omit"
 
 
+class AgeTokenMode(StrEnum):
+    """How (if at all) to add a time-derived "age at the start of the window" token to the static data.
+
+    The age token is a single extra static measurement, appended after the subject's real static
+    measurements, describing the subject's age at the first dynamic event of the sampled window. It
+    rides along with whatever `StaticInclusionMode` is configured (`INCLUDE` or `PREPEND`), so in
+    `PREPEND` mode it lands directly before the first dynamic measurement. Its code indices live
+    *past* the end of the tokenized vocabulary; see `MEDSTorchDataConfig.vocab_size` and
+    `MEDSTorchDataConfig.derived_codes`.
+
+    Attributes:
+        OMIT: Do not add an age token.
+        NUMERIC: Add one token with a dedicated `AGE` code and the age (in years) as its numeric value. If
+            the subject's age is unknown (no birth event was observed), the numeric value is missing.
+        QUANTIZED: Add one token whose code identifies the age bin (per
+            `MEDSTorchDataConfig.age_bin_edges_years`) the age falls into, with no numeric value. Unknown
+            ages map to a dedicated `AGE//UNKNOWN` code.
+    """
+
+    OMIT = "omit"
+    NUMERIC = "numeric"
+    QUANTIZED = "quantized"
+
+
 class BatchMode(StrEnum):
     """An enumeration of the possible batch modes for the dataset.
 
@@ -255,9 +279,11 @@ class StaticData(NamedTuple):
             batch_mode: The batch mode to use for the conversion (either SEM or SM).
             schema: The schema to use for the conversion.
             keys: Optional filter restricting which top-level keys (`code`, `numeric_value`,
-                `time_delta_days`) appear in the output. Used so the static JNRT keyset can
-                match a dynamic JNRT loaded with `JointNestedRaggedTensorDict(..., keys=...)`
-                before `concatenate`. When `None` (default) all keys are emitted.
+                `time_delta_days`, `age_years`) appear in the output. Used so the static JNRT keyset
+                can match a dynamic JNRT loaded with `JointNestedRaggedTensorDict(..., keys=...)`
+                before `concatenate`. When `None` (default) `code`, `numeric_value`, and
+                `time_delta_days` are emitted; `age_years` (all-NaN, as static measurements carry no
+                per-position age) is only emitted when explicitly requested.
 
         Returns:
             A JointNestedRaggedTensorDict representation of the static data, including the code, numeric
@@ -319,6 +345,17 @@ class StaticData(NamedTuple):
             .
             time_delta_days
             [nan nan nan]
+            >>> pprint_dense(static_data.to_JNRT(BatchMode.SEM, keys={"code", "age_years"}).to_dense())
+            age_years
+            [nan]
+            .
+            ---
+            .
+            dim1/mask
+            [[ True  True  True]]
+            .
+            code
+            [[1 2 3]]
 
         Passing an invalid batch mode will raise an error:
 
@@ -332,20 +369,25 @@ class StaticData(NamedTuple):
             case BatchMode.SEM:
                 static_dict = {
                     "time_delta_days": [np.nan],
+                    "age_years": [np.nan],
                     "code": [self.code],
                     "numeric_value": [self.numeric_value],
                 }
             case BatchMode.SM:
                 static_dict = {
                     "time_delta_days": [np.nan for _ in range(len(self.code))],
+                    "age_years": [np.nan for _ in range(len(self.code))],
                     "code": self.code,
                     "numeric_value": self.numeric_value,
                 }
             case _:
                 raise ValueError(f"Invalid batch mode {batch_mode}!")
 
-        if keys is not None:
-            static_dict = {k: v for k, v in static_dict.items() if k in keys}
+        if keys is None:
+            # `age_years` is only present on dynamic data when age features are enabled, so it is
+            # opt-in here (via `keys=`) rather than emitted by default.
+            keys = {"time_delta_days", "code", "numeric_value"}
+        static_dict = {k: v for k, v in static_dict.items() if k in keys}
 
         return JointNestedRaggedTensorDict(static_dict, schema=schema)
 
@@ -1353,6 +1395,14 @@ class MEDSTorchBatch:
     time_delta_days: torch.FloatTensor | None = None
     event_mask: torch.BoolTensor | None = None
 
+    # Optional per-position age (see `MEDSTorchDataConfig.include_age`). Event-level in SEM mode,
+    # measurement-level in SM mode. `age_mask` is `False` at padding, static, and unknown-age
+    # positions (where `age_years` is 0); `age_bin` is 0 at those positions and `1..n_bins`
+    # elsewhere, and is only present when `age_bin_edges_years` is configured.
+    age_years: torch.FloatTensor | None = None
+    age_mask: torch.BoolTensor | None = None
+    age_bin: torch.LongTensor | None = None
+
     # Static vs. dynamic differentiation (for prepending static data):
     static_mask: torch.BoolTensor | None = None
 
@@ -1374,13 +1424,20 @@ class MEDSTorchBatch:
         "static_numeric_value",
         "static_numeric_value_mask",
     )
-    SE_TENSOR_NAMES: ClassVar[tuple[str]] = ("time_delta_days", "event_mask", "static_mask")
+    AGE_TENSOR_NAMES: ClassVar[tuple[str]] = ("age_years", "age_mask", "age_bin")
+    SE_TENSOR_NAMES: ClassVar[tuple[str]] = (
+        "time_delta_days",
+        "event_mask",
+        "static_mask",
+        *AGE_TENSOR_NAMES,
+    )
     SM_TENSOR_NAMES: ClassVar[tuple[str]] = (
         "time_delta_days",
         "code",
         "numeric_value",
         "numeric_value_mask",
         "static_mask",
+        *AGE_TENSOR_NAMES,
     )
     SEM_TENSOR_NAMES: ClassVar[tuple[str]] = ("code", "numeric_value", "numeric_value_mask")
     LABEL_TENSOR_NAMES: ClassVar[tuple[str]] = ("boolean_value",)
@@ -1415,6 +1472,17 @@ class MEDSTorchBatch:
                 f"but got numeric_value={'present' if self.numeric_value is not None else 'None'} "
                 f"and numeric_value_mask={'present' if self.numeric_value_mask is not None else 'None'}."
             )
+
+        # age_years and age_mask must likewise be provided (or omitted) as a pair; age_bin is an
+        # optional add-on that only makes sense alongside them.
+        if (self.age_years is None) != (self.age_mask is None):
+            raise ValueError("age_years and age_mask must both be provided or both be None.")
+        if self.age_bin is not None and self.age_years is None:
+            raise ValueError("age_bin may only be provided alongside age_years and age_mask.")
+        age_shape = self._SE_shape if self.mode == BatchMode.SEM else self._SM_shape
+        for name in self.AGE_TENSOR_NAMES:
+            if getattr(self, name) is not None:
+                self.__check_shape(name, age_shape)
 
         # Dynamic-field shape checks. `time_delta_days`, `numeric_value`, and
         # `numeric_value_mask` are all optional now (see `_REQ_TENSORS` — gated by
