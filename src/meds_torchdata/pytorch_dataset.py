@@ -65,7 +65,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         >>> pyd = MEDSPytorchDataset(cfg, split="nonexistent")
         Traceback (most recent call last):
             ...
-        FileNotFoundError: No schema files found in /tmp/.../tokenization/schemas! If your data is not sharded
+        FileNotFoundError: No schema files found in /tmp/.../data/schemas! If your data is not sharded
         by split, this error may occur because this codebase does not handle non-split sharded data. See Issue
         #79 for tracking this issue.
     """

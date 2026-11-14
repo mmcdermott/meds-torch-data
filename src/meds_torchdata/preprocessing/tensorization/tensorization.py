@@ -149,11 +149,12 @@ def convert_to_NRT(df: pl.LazyFrame) -> JointNestedRaggedTensorDict:
     return JointNestedRaggedTensorDict(tensors_dict, schema=schema)
 
 
-@Stage.register(is_metadata=False, example_class=MTDStageExample)
+@Stage.register(is_metadata=False, carry_input_data=["schemas"], example_class=MTDStageExample)
 def main(cfg: DictConfig):
     """Tensorizes the data into the nested ragged tensor formulation.
 
-    See the stage configs for args.
+    The tokenization stage's ``schemas/`` are carried into this stage's data output alongside the tensors,
+    so the published cohort holds everything `MEDSPytorchDataset` reads. See the stage configs for args.
     """
 
     map_stage(

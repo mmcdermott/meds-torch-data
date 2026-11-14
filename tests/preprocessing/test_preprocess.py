@@ -125,7 +125,7 @@ def test_preprocess_end_to_end(simple_static_MEDS: Path):
     `test_stages.py::test_pipeline_*` validates golden outputs but invokes
     `MEDS_transform-pipeline` directly, bypassing `MTD_preprocess.__main__`. This test
     closes that gap: it runs the real CLI entrypoint and checks that the produced
-    `tokenization/schemas/*.parquet`, `tokenization/event_seqs/*.parquet`, and
+    `data/schemas/*.parquet`, `tokenization/data/event_seqs/*.parquet`, and
     `data/*.nrt` outputs exist, are readable, and carry the expected top-level columns /
     tensor keys. It doesn't pin exact values (the pipeline tests already do that more
     rigorously); the point is to catch wrapper-side regressions — config synthesis,
@@ -146,14 +146,14 @@ def test_preprocess_end_to_end(simple_static_MEDS: Path):
             f"MTD_preprocess failed (rc={out.returncode}).\nstdout:\n{out.stdout}\nstderr:\n{out.stderr}"
         )
 
-        # MTD_preprocess lays out per-stage intermediate outputs under `<stage>/` subdirs
-        # and the final tensorization outputs under `data/`. (pipeline_tester uses the same
-        # convention — see `MEDS_transforms/pytest_plugin.py::pipeline_tester`.)
-        schemas = sorted((cohort_dir / "tokenization" / "schemas").rglob("*.parquet"))
-        event_seqs = sorted((cohort_dir / "tokenization" / "event_seqs").rglob("*.parquet"))
+        # Each stage writes a MEDS dataset under `<stage>/{data,metadata}`, and the last stage's is
+        # published as `data/` and `metadata/`: the NRTs, with the tokenization schemas carried
+        # alongside them in `data/schemas/`.
+        schemas = sorted((cohort_dir / "data" / "schemas").rglob("*.parquet"))
+        event_seqs = sorted((cohort_dir / "tokenization" / "data" / "event_seqs").rglob("*.parquet"))
         nrts = sorted(fp for fp in (cohort_dir / "data").rglob("*.nrt"))
-        assert schemas, f"No schema parquets produced under {cohort_dir}/tokenization/schemas/"
-        assert event_seqs, f"No event_seqs parquets produced under {cohort_dir}/tokenization/event_seqs/"
+        assert schemas, f"No schema parquets produced under {cohort_dir}/data/schemas/"
+        assert event_seqs, f"No event_seqs parquets produced under {cohort_dir}/tokenization/data/event_seqs/"
         assert nrts, f"No NRT files produced under {cohort_dir}/data/"
         assert len(schemas) == len(event_seqs) == len(nrts), (
             f"Shard-count mismatch: {len(schemas)} schemas, {len(event_seqs)} event_seqs, {len(nrts)} NRTs"
