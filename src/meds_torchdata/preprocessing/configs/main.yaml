@@ -9,6 +9,10 @@ stage_runner_fp: null
 do_overwrite: False
 do_reshard: False
 
+# Regex over code strings identifying the code(s) that mark a subject's birth, used to compute
+# time-derived age features. Defaults to the MEDS standard birth code (with optional suffixes).
+birth_code_regex: "^MEDS_BIRTH(//.*)?$"
+
 log_dir: ${output_dir}/.logs
 
 # Hydra

@@ -214,6 +214,31 @@ class StaticInclusionMode(StrEnum):
     OMIT = "omit"
 
 
+class AgeTokenMode(StrEnum):
+    """How (if at all) to prepend a time-derived "age at the start of the window" measurement.
+
+    Time-derived measurements are values computed from a subject's timeline (here, their age) rather than
+    read from the data. They are prepended to each sequence as their own block — after any prepended static
+    measurements and immediately before the first dynamic measurement, in every `StaticInclusionMode` — and
+    are marked by `MEDSTorchBatch.time_derived_mask`. In SM mode each is one sequence element; in SEM mode
+    the block forms one event. Their code indices live *past* the end of the tokenized vocabulary; see
+    `MEDSTorchDataConfig.vocab_size` and `MEDSTorchDataConfig.time_derived_codes`.
+
+    Attributes:
+        OMIT: Do not add an age measurement.
+        NUMERIC: Add one measurement with a dedicated `AGE` code whose numeric value is the age at the
+            window's first dynamic event, standardized with the training-set age mean and standard
+            deviation. If the subject's age is unknown (no birth event), the numeric value is missing.
+        QUANTIZED: Add one measurement whose code identifies the (equal-frequency) age bin the age falls
+            into (see `MEDSTorchDataConfig.n_age_bins`), with no numeric value. Unknown ages map to a
+            dedicated `AGE//UNKNOWN` code.
+    """
+
+    OMIT = "omit"
+    NUMERIC = "numeric"
+    QUANTIZED = "quantized"
+
+
 class BatchMode(StrEnum):
     """An enumeration of the possible batch modes for the dataset.
 
@@ -391,6 +416,11 @@ class MEDSTorchBatch:
       - Static data elements (`static_code`, `static_numeric_value`, and `static_numeric_value_mask`) are
         of shape `[batch_size, max_static_measurements_per_subject]`.
       - The label tensor, `boolean_value` tensor is of shape `[batch_size]`.
+      - Prepended time-derived measurements (e.g., the age token; see `AgeTokenMode`) sit after any prepended
+        static data and before the dynamic data, in every static inclusion mode. `time_derived_mask` marks
+        them, with the same per-event (SEM) or per-measurement (SM) shape as `static_mask`.
+      - The optional per-position age tensors, `age` (standardized; 0 where there is no age information) and
+        `age_bin` (`1..n_age_bins`; 0 where there is no age information), also have that shape.
 
     In SEM Mode:
 
@@ -1353,8 +1383,22 @@ class MEDSTorchBatch:
     time_delta_days: torch.FloatTensor | None = None
     event_mask: torch.BoolTensor | None = None
 
+    # Optional per-position age (see `MEDSTorchDataConfig.include_age`). Event-level in SEM mode,
+    # measurement-level in SM mode. `age` is standardized and is 0 (the training mean) wherever there
+    # is no age information — padding, static, and time-derived positions, and subjects without a birth
+    # event — so it needs no separate mask (positions themselves are identified by `event_mask` /
+    # `code != 0`, `static_mask`, and `time_derived_mask`). `age_bin` is likewise 0 at those positions
+    # and `1..n_age_bins` elsewhere, and is only present when `n_age_bins` is configured.
+    age: torch.FloatTensor | None = None
+    age_bin: torch.LongTensor | None = None
+
     # Static vs. dynamic differentiation (for prepending static data):
     static_mask: torch.BoolTensor | None = None
+
+    # Marks prepended time-derived measurements (e.g., the age token; see
+    # `MEDSTorchDataConfig.age_token_mode`). Same shape as `static_mask` would be, but present in every
+    # static inclusion mode, and disjoint from `static_mask`.
+    time_derived_mask: torch.BoolTensor | None = None
 
     # Static data elements (subject-level):
     static_code: torch.LongTensor | None = None
@@ -1374,13 +1418,22 @@ class MEDSTorchBatch:
         "static_numeric_value",
         "static_numeric_value_mask",
     )
-    SE_TENSOR_NAMES: ClassVar[tuple[str]] = ("time_delta_days", "event_mask", "static_mask")
+    AGE_TENSOR_NAMES: ClassVar[tuple[str]] = ("age", "age_bin")
+    SE_TENSOR_NAMES: ClassVar[tuple[str]] = (
+        "time_delta_days",
+        "event_mask",
+        "static_mask",
+        "time_derived_mask",
+        *AGE_TENSOR_NAMES,
+    )
     SM_TENSOR_NAMES: ClassVar[tuple[str]] = (
         "time_delta_days",
         "code",
         "numeric_value",
         "numeric_value_mask",
         "static_mask",
+        "time_derived_mask",
+        *AGE_TENSOR_NAMES,
     )
     SEM_TENSOR_NAMES: ClassVar[tuple[str]] = ("code", "numeric_value", "numeric_value_mask")
     LABEL_TENSOR_NAMES: ClassVar[tuple[str]] = ("boolean_value",)
@@ -1415,6 +1468,15 @@ class MEDSTorchBatch:
                 f"but got numeric_value={'present' if self.numeric_value is not None else 'None'} "
                 f"and numeric_value_mask={'present' if self.numeric_value_mask is not None else 'None'}."
             )
+
+        # Per-position age tensors and the time-derived mask follow the per-event (SEM) or
+        # per-measurement (SM) shape.
+        if self.age_bin is not None and self.age is None:
+            raise ValueError("age_bin may only be provided alongside age.")
+        position_shape = self._SE_shape if self.mode == BatchMode.SEM else self._SM_shape
+        for name in (*self.AGE_TENSOR_NAMES, "time_derived_mask"):
+            if getattr(self, name) is not None:
+                self.__check_shape(name, position_shape)
 
         # Dynamic-field shape checks. `time_delta_days`, `numeric_value`, and
         # `numeric_value_mask` are all optional now (see `_REQ_TENSORS` — gated by

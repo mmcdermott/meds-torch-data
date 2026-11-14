@@ -1,0 +1,4 @@
+# Number of evenly spaced quantile levels (from 0 to 1, inclusive) at which to record each time-derived
+# measurement's training distribution. The dataset derives equal-frequency bin edges for any requested
+# number of bins by interpolating this grid, so it should be comfortably finer than any bin count in use.
+n_quantiles: 1001

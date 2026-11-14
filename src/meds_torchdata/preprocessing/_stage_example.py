@@ -18,6 +18,7 @@ actual output.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,8 +43,12 @@ class MTDStageExample(StageExample):
     `JointNestedRaggedTensorDict.equals(equal_nan=True)` for NRT.
     """
 
-    # Redeclare as Path — `want_data` here is a yaml spec file, not a parsed MEDSDataset.
+    # Redeclare as Path — `want_data` / `want_metadata` here are yaml spec files, not a parsed
+    # MEDSDataset / DataFrame. Exactly one is set: `want_metadata` for metadata stages (whose
+    # `out_data.yaml` only declares `metadata/...` files), `want_data` otherwise. Upstream's
+    # `pipeline_tester` keys off which one is set to decide where a stage's outputs live.
     want_data: Path | None = None
+    want_metadata: Path | None = None
 
     @classmethod
     def is_example_dir(cls, path: Path) -> bool:
@@ -82,25 +87,44 @@ class MTDStageExample(StageExample):
             if not isinstance(stage_cfg, dict):
                 raise TypeError(f"{stage_cfg_fp} must contain a YAML mapping; got {type(stage_cfg).__name__}")
 
+        want_fp = want_data_fp if want_data_fp.is_file() else None
+        is_metadata_only = want_fp is not None and _declares_only_metadata(want_fp)
         return cls(
             stage_name=stage_name,
             scenario_name=scenario_name,
-            want_data=want_data_fp if want_data_fp.is_file() else None,
+            want_data=None if is_metadata_only else want_fp,
+            want_metadata=want_fp if is_metadata_only else None,
             in_data=in_fp if in_fp.is_file() else None,
             stage_cfg=stage_cfg,
         )
 
+    def render_content(self, example_dir: Path | None = None) -> list[str]:
+        """Render this example for the stage docs, handling metadata-only (`want_metadata`) specs.
+
+        Upstream renders a `Path`-valued `want_data` as a YAML block but assumes `want_metadata` is a
+        DataFrame, so metadata-only examples are rendered through the `want_data` path.
+
+        Examples:
+            >>> with yaml_disk({"out_data.yaml": {"metadata/x.parquet": {"a": [1]}}}) as d:
+            ...     example = MTDStageExample.from_dir("demo", "default", d)
+            ...     print(any("metadata/x.parquet" in line for line in example.render_content()))
+            True
+        """
+        if isinstance(self.want_metadata, Path):
+            as_data = dataclasses.replace(self, want_data=self.want_metadata, want_metadata=None)
+            return StageExample.render_content(as_data, example_dir)
+        return super().render_content(example_dir)
+
     def check_outputs(self, output_dir: Path, is_resolved_dir: bool = False) -> None:
         # `is_example_dir` already required `out_data.yaml`, and `from_dir` always wires
-        # `want_data` to that file. meds-torch-data has no metadata-only stages, so the
-        # `want_data is None` path inherited from the parent `StageExample` contract is
-        # unreachable here — don't guard for it.
-        with yaml_disk(self.want_data) as expected_root:
+        # exactly one of `want_data` / `want_metadata` to that file.
+        want_fp = self.want_data if self.want_data is not None else self.want_metadata
+        with yaml_disk(want_fp) as expected_root:
             # Under pipeline_tester's per-stage validation, `output_dir` is already resolved
-            # to `${cohort}/<stage_name>/`, so the leading `data/` segment in expected paths
-            # has been absorbed by the caller.
+            # to `${cohort}/<stage_name>/`, so the leading `data/` (or, for metadata stages,
+            # `metadata/`) segment in expected paths has been absorbed by the caller.
             def _canonical(rel: Path) -> Path:
-                if is_resolved_dir and rel.parts and rel.parts[0] == "data":
+                if is_resolved_dir and rel.parts and rel.parts[0] in ("data", "metadata"):
                     return Path(*rel.parts[1:])
                 return rel
 
@@ -125,6 +149,21 @@ class MTDStageExample(StageExample):
             )
             for rel in sorted(expected):
                 _compare(expected[rel], actual[rel], rel, self.df_check_kwargs)
+
+
+def _declares_only_metadata(out_data_fp: Path) -> bool:
+    """Whether an `out_data.yaml` spec only declares files under `metadata/` (i.e., a metadata stage).
+
+    Examples:
+        >>> with yaml_disk({"out_data.yaml": {"metadata/codes.parquet": {"code": ["A"]}}}) as d:
+        ...     _declares_only_metadata(d / "out_data.yaml")
+        True
+        >>> with yaml_disk({"out_data.yaml": {"data/x.parquet": {"a": [1]}}}) as d:
+        ...     _declares_only_metadata(d / "out_data.yaml")
+        False
+    """
+    keys = (safe_load(out_data_fp.read_text()) or {}).keys()
+    return bool(keys) and all(str(k).startswith("metadata/") for k in keys)
 
 
 def _compare(expected_fp: Path, actual_fp: Path, rel: Path, df_check_kwargs: dict) -> None:

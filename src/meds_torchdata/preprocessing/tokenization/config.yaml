@@ -1,0 +1,4 @@
+# Regex (matched against code-metadata `code` strings) identifying the codes that mark a subject's
+# birth. Matching codes' earliest time per subject is written to the schema `birth_time` column.
+# Mirrors the default of MEDS-Transforms' `add_time_derived_measurements` age `DOB_regex`.
+birth_code_regex: "^MEDS_BIRTH(//.*)?$"

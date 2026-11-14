@@ -1,6 +1,13 @@
 # Multi-shard scenario: four shards across three splits. Exercises that the stage
 # iterates correctly over arbitrarily-nested shard paths (`train/0`, `train/1`,
 # `tuning/0`, `held_out/0`) and produces per-shard output independently.
+#
+# The code metadata marks vocab index 10 as `MEDS_BIRTH`, so subject 1 (whose first event is code 10)
+# gets a `birth_time`; every other subject's is null. Codes not listed in the metadata are fine — only
+# the birth-code lookup reads this file.
+metadata/codes.parquet:
+  code: [MEDS_BIRTH, HR]
+  code/vocab_index: [10, 12]
 data/train/0.parquet:
   subject_id: [1, 1, 1, 2, 2, 2]
   time:

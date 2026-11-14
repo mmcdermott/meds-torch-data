@@ -24,7 +24,17 @@ def test_stage_example(stage_example):
     stage_example.test()
 
 
-_PIPELINE_YAML = "input_dir: {input_dir}\noutput_dir: {output_dir}\nstages: [tokenization, tensorization]\n"
+# `pipeline_tester` doesn't apply each scenario's `cfg.yaml`, so stage-config overrides a chained
+# scenario depends on (here, `fit_time_derived_stats/default`'s small quantile grid) are set inline.
+_PIPELINE_YAML = """
+input_dir: {input_dir}
+output_dir: {output_dir}
+stages:
+  - tokenization
+  - fit_time_derived_stats:
+      n_quantiles: 5
+  - tensorization
+"""
 
 # Note: these pipeline tests do NOT exercise the `MTD_preprocess` CLI wrapper — they invoke
 # `MEDS_transform-pipeline` directly through upstream's `pipeline_tester`. The wrapper's
@@ -37,11 +47,15 @@ _PIPELINE_YAML = "input_dir: {input_dir}\noutput_dir: {output_dir}\nstages: [tok
 
 
 def test_pipeline_serial():
-    """Chain tokenization → tensorization through `MEDS_transform-pipeline` in serial mode."""
+    """Chain tokenization → fit_time_derived_stats → tensorization via `MEDS_transform-pipeline`, serially."""
     pipeline_tester(
         pipeline_yaml=_PIPELINE_YAML,
         stage_runner_yaml=None,
-        stage_scenario_sequence=["tokenization/default", "tensorization/default"],
+        stage_scenario_sequence=[
+            "tokenization/default",
+            "fit_time_derived_stats/default",
+            "tensorization/default",
+        ],
     )
 
 
@@ -55,5 +69,9 @@ def test_pipeline_parallel():
     pipeline_tester(
         pipeline_yaml=_PIPELINE_YAML,
         stage_runner_yaml="parallelize:\n  n_workers: 2\n  launcher: joblib\n",
-        stage_scenario_sequence=["tokenization/default", "tensorization/default"],
+        stage_scenario_sequence=[
+            "tokenization/default",
+            "fit_time_derived_stats/default",
+            "tensorization/default",
+        ],
     )

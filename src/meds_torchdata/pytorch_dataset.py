@@ -10,9 +10,13 @@ from meds import DataSchema, LabelSchema
 from nested_ragged_tensors.ragged_numpy import JointNestedRaggedTensorDict
 
 from .config import MEDSTorchDataConfig, StaticInclusionMode
-from .types import BatchMode, MEDSTorchBatch, StaticData, SubsequenceSamplingStrategy
+from .types import BatchMode, MEDSTorchBatch, PaddingSide, StaticData, SubsequenceSamplingStrategy
 
 logger = logging.getLogger(__name__)
+
+# Average Gregorian year, used to convert event-time offsets from birth into ages in years. This must
+# match the convention used by the `fit_time_derived_stats` preprocessing stage.
+MICROSECONDS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1e6
 
 
 class MEDSPytorchDataset(torch.utils.data.Dataset):
@@ -260,6 +264,14 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         )
         if needs_meas_per_event:
             needed_schema_cols.append("measurements_per_event")
+        # `birth_time` is only needed by the age features; it is consumed into the per-shard
+        # event-age arrays below and then dropped, so `schema_df` is unaffected.
+        if self.config.uses_age:
+            needed_schema_cols.append("birth_time")
+
+        # Per-shard `(flat event ages in years, per-subject start offsets)`, populated only when
+        # age features are enabled. See `_compute_event_ages`.
+        self._event_ages_by_shard: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
         for shard, schema_fp in self.config.schema_fps:
             if not shard.startswith(f"{self.split}/"):
@@ -280,8 +292,17 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                         "this feature landed) do not have. Re-run preprocessing "
                         "(`MTD_preprocess`) to produce it."
                     )
+            if self.config.uses_age and "birth_time" not in pq.read_schema(schema_fp).names:
+                raise ValueError(
+                    f"Age features require the `birth_time` column on the schema parquet at {schema_fp}, "
+                    "which older tensorized cohorts (preprocessed before time-derived measurements "
+                    "existed) do not have. Re-run preprocessing (`MTD_preprocess`) to produce it."
+                )
 
             df = pl.read_parquet(schema_fp, columns=needed_schema_cols, use_pyarrow=True)
+            if self.config.uses_age:
+                self._event_ages_by_shard[shard] = self._compute_event_ages(df)
+                df = df.drop("birth_time")
             if self.config.includes_static:
                 df = df.with_columns(
                     pl.col("static_code").list.eval(pl.element().fill_null(0)),
@@ -298,6 +319,13 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                 "this error may occur because this codebase does not handle non-split sharded data. See "
                 "Issue #79 for tracking this issue."
             )
+
+        # Load (and validate) the age statistics up front so a cohort without them fails at
+        # construction rather than on the first `__getitem__` inside a DataLoader worker.
+        if self.config.uses_age:
+            _ = self.config.age_stats
+            if self.config.n_age_bins is not None:
+                _ = self.config.age_bin_edges
 
         self.index = list(
             zip(self.schema_df[DataSchema.subject_id_name], self.schema_df[self.END_IDX], strict=True)
@@ -744,6 +772,20 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             >>> [sm_prepend_pyd._effective_max_seq_len_for(s) for s in (239684, 1195293)]
             [8, 8]
 
+            Prepended time-derived measurements (e.g., the age token; see
+            `MEDSTorchDataConfig.age_token_mode`) reserve one more slot, in any static inclusion mode:
+
+            >>> sm_age_pyd = MEDSPytorchDataset(
+            ...     dataclasses.replace(sm_prepend_cfg, age_token_mode="numeric"), split="train"
+            ... )
+            >>> [sm_age_pyd._effective_max_seq_len_for(s) for s in (239684, 1195293)]
+            [7, 7]
+            >>> include_age_pyd = MEDSPytorchDataset(
+            ...     dataclasses.replace(pyd.config, age_token_mode="numeric"), split="train"
+            ... )
+            >>> [include_age_pyd._effective_max_seq_len_for(s) for s in (239684, 1195293)]
+            [9, 9]
+
             In `SEM + PREPEND` the reduction is a flat `1` (one event slot reserved for the
             prepended static event):
 
@@ -755,7 +797,8 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             [9, 9]
         """
 
-        max_seq_len = self.config.max_seq_len
+        # Prepended time-derived measurements shrink the window in every static inclusion mode.
+        max_seq_len = self.config.max_seq_len - self._n_time_derived_seq_els
         if self.config.static_inclusion_mode != StaticInclusionMode.PREPEND:
             return max_seq_len
         if self.config.batch_mode == BatchMode.SEM:
@@ -1019,12 +1062,24 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         # all we need: `process_dynamic_data` + the `STEP_THROUGH → TO_END` delegation in
         # `subsample_st_offset` handles the window at the event level.
         explicit_end = self.step_through_meas_ends[idx] if self.step_through_meas_ends is not None else None
-        dynamic_data = self.config.process_dynamic_data(
+        processed = self.config.process_dynamic_data(
             dynamic_data,
             n_static_seq_els=n_static_seq_els,
             rng=seed,
             explicit_end=explicit_end,
+            n_time_derived_seq_els=self._n_time_derived_seq_els,
+            return_bounds=self.config.uses_age,
         )
+
+        if self.config.uses_age:
+            window, st, end = processed
+            # Without per-position ages, only the window's first age (for the age token) is needed.
+            ages_end = end if self.config.include_age else min(st + 1, end)
+            window_ages = self._window_ages(subject_id, dynamic_data, st, ages_end)
+            if self.config.include_age:
+                out["age_years"] = window_ages
+        else:
+            window = processed
 
         # Only leak the per-subject window count into the sample dict when the user has
         # explicitly asked for it in the batch — otherwise the sample API would depend on
@@ -1034,15 +1089,24 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
         if self.config.include_subject_window_counts_in_batch and self._windows_per_subject is not None:
             out["n_subject_windows"] = self._windows_per_subject[subject_id]
 
+        # Match prefix JNRT keysets to whatever `load_subject_data` actually loaded from disk —
+        # `include_numeric_value=False` / `include_time_delta=False` cause the dynamic side to skip
+        # those keys via NRT 0.2's `keys=`, and `concatenate` requires exact keyset agreement.
         if self.config.static_inclusion_mode == StaticInclusionMode.PREPEND:
-            # Match the static JNRT keyset to whatever `load_subject_data` actually loaded
-            # from disk — `include_numeric_value=False` / `include_time_delta=False` cause
-            # the dynamic side to skip those keys via NRT 0.2's `keys=`, and `concatenate`
-            # requires exact keyset agreement on both sides.
-            static_as_JNRT = static_data.to_JNRT(
-                self.config.batch_mode, dynamic_data.schema, keys=dynamic_data.keys()
-            )
-            dynamic_data = JointNestedRaggedTensorDict.concatenate([static_as_JNRT, dynamic_data])
+            static_as_JNRT = static_data.to_JNRT(self.config.batch_mode, window.schema, keys=window.keys())
+            window = JointNestedRaggedTensorDict.concatenate([static_as_JNRT, window])
+
+        if self._n_time_derived_seq_els:
+            # The time-derived block (currently just the age token) describes the start of the window.
+            # It is recorded separately rather than concatenated into `dynamic`: `collate` inserts it
+            # directly into the dense batch tensors, which is far cheaper than building and
+            # concatenating a per-sample `JointNestedRaggedTensorDict`.
+            start_age = float(window_ages[0]) if len(window_ages) else float("nan")
+            age_code, age_value = self.config.age_token(start_age)
+            out["time_derived_code"] = [age_code]
+            out["time_derived_numeric_value"] = [age_value]
+
+        dynamic_data = window
 
         out["dynamic"] = dynamic_data
 
@@ -1050,6 +1114,89 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             out[self.LABEL_COL] = self.labels[idx]
 
         return out
+
+    @property
+    def _n_time_derived_seq_els(self) -> int:
+        """The number of sequence elements the prepended time-derived block occupies.
+
+        One per time-derived measurement in SM mode; one event (holding all of them) in SEM mode.
+        """
+        n = self.config.n_time_derived_measurements
+        return n if (n == 0 or self.config.batch_mode == BatchMode.SM) else 1
+
+    @staticmethod
+    def _compute_event_ages(schema_df: pl.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+        """Compute every subject's age (in years) at each of their events, flattened across subjects.
+
+        This runs once per shard at dataset construction, so that `__getitem__` only has to slice.
+
+        Args:
+            schema_df: A shard's subject schema, with `time` (list of event times) and `birth_time`.
+
+        Returns:
+            `(ages, starts)`: `ages` is a flat float32 array of every subject's per-event ages, in schema
+            row order (NaN for subjects with no birth time); subject row `i`'s ages are
+            `ages[starts[i] : starts[i] + n_events_i]`.
+
+        Examples:
+            >>> from datetime import datetime
+            >>> schema_df = pl.DataFrame({
+            ...     "time": [
+            ...         [datetime(2000, 1, 1), datetime(2010, 1, 1)], [datetime(2005, 1, 1)], None,
+            ...         [datetime(2021, 1, 1)],
+            ...     ],
+            ...     "birth_time": [datetime(2000, 1, 1), None, None, datetime(2020, 1, 1)],
+            ... })
+            >>> ages, starts = MEDSPytorchDataset._compute_event_ages(schema_df)
+            >>> ages.round(3), starts
+            (array([ 0.   , 10.001,    nan,  1.002], dtype=float32), array([0, 2, 3, 3]))
+        """
+        n_events = schema_df[DataSchema.time_name].list.len().fill_null(0).to_numpy()
+        starts = np.concatenate([[0], np.cumsum(n_events)[:-1]]).astype(np.int64)
+        offsets_us = schema_df.select(
+            (
+                pl.col(DataSchema.time_name).list.eval(pl.element().dt.epoch("us"))
+                - pl.col("birth_time").dt.epoch("us")
+            ).alias("offset_us")
+        )["offset_us"]
+        flat = offsets_us.list.explode(empty_as_null=False, keep_nulls=False).cast(pl.Float64)
+        ages = (flat / MICROSECONDS_PER_YEAR).fill_null(np.nan).to_numpy().astype(np.float32)
+        return ages, starts
+
+    def _window_ages(
+        self, subject_id: int, dynamic_data: JointNestedRaggedTensorDict, st: int, end: int
+    ) -> np.ndarray:
+        """The subject's age (in years) at each position of a sampled `[st, end)` window.
+
+        Args:
+            subject_id: The subject.
+            dynamic_data: The subject's un-flattened dynamic data, loaded from their first event (as in
+                `_seeded_getitem`); only used in SM mode, to map measurement positions to events.
+            st: The window start, in the batch mode's unit (events in SEM, measurements in SM).
+            end: The window end (exclusive), in the same unit.
+
+        Examples:
+            >>> import dataclasses
+            >>> cfg = dataclasses.replace(sample_pytorch_dataset.config, include_age=True)
+            >>> pyd = MEDSPytorchDataset(cfg, split="train")
+
+            Subject 68729 was born on 1978-03-09 (their first event) and has two later events on
+            2010-05-26 (11,766.1 days, or ~32.21 years, after birth), with 3 and 1 measurements:
+
+            >>> dynamic_data, _ = pyd.load_subject_data(68729, 0, 3)
+            >>> pyd._window_ages(68729, dynamic_data, 0, 5).round(4)
+            array([ 0.    , 32.2138, 32.2138, 32.2138, 32.2141], dtype=float32)
+            >>> pyd._window_ages(68729, dynamic_data, 3, 5).round(4)  # straddles the last two events
+            array([32.2138, 32.2141], dtype=float32)
+        """
+        shard, subject_idx = self.subj_locations[subject_id]
+        ages, starts = self._event_ages_by_shard[shard]
+        subject_start = starts[subject_idx]
+        if self.config.batch_mode == BatchMode.SEM:
+            return ages[subject_start + st : subject_start + end]
+        meas_ends = dynamic_data.tensors["dim1/bounds"]
+        event_idx = np.searchsorted(meas_ends, np.arange(st, end), side="right")
+        return ages[subject_start + event_idx]
 
     def load_subject_data(
         self, subject_id: int, st: int, end: int
@@ -1815,6 +1962,29 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             out["numeric_value_mask"] = ~torch.isnan(tensorized["numeric_value"])
             out["numeric_value"] = torch.nan_to_num(tensorized.pop("numeric_value"), nan=0).float()
 
+        # Per-sample layout: [padding (if left-padded)] [static] [time-derived] [dynamic] [padding (if
+        # right-padded)]. `n_static_seq_els`, the time-derived block size, and `len(item["dynamic"])` are
+        # all in the batch mode's sequence unit (events in SEM mode, measurements in SM mode).
+        seq_len = out["code"].shape[1]
+        lengths = torch.as_tensor([len(item["dynamic"]) for item in batch])
+        if self.config.padding_side == PaddingSide.LEFT:
+            prefix_offsets = seq_len - lengths
+        else:
+            prefix_offsets = torch.zeros_like(lengths)
+        n_static = torch.as_tensor([item.get("n_static_seq_els", 0) for item in batch])
+        dynamic_starts = prefix_offsets + n_static
+
+        if n_time_derived := self._n_time_derived_seq_els:
+            # Insertion leaves the left padding and static data in place and shifts the dynamic data right.
+            self._insert_time_derived(out, batch, dynamic_starts)
+            out["time_derived_mask"] = self._span_mask(
+                dynamic_starts, torch.full_like(lengths, n_time_derived), seq_len + n_time_derived
+            )
+            seq_len += n_time_derived
+            dynamic_starts = dynamic_starts + n_time_derived
+        if self.config.include_age:
+            out.update(self._collate_age(batch, dynamic_starts, seq_len))
+
         match self.config.static_inclusion_mode:
             case StaticInclusionMode.OMIT:
                 pass
@@ -1832,24 +2002,7 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
                 ).float()
                 out["static_numeric_value_mask"] = ~torch.isnan(static_tensorized["static_numeric_value"])
             case StaticInclusionMode.PREPEND:
-                n_static_seq_els = [item["n_static_seq_els"] for item in batch]
-
-                match self.config.batch_mode:
-                    case BatchMode.SEM:
-                        static_mask = torch.zeros_like(out["event_mask"])
-                        static_mask[:, 0] = True
-                    case BatchMode.SM:
-                        # Use `out["code"]` for the shape / dtype reference rather than one
-                        # of the optional numeric/time fields, so that static_mask still
-                        # works when `include_numeric_value=False` or
-                        # `include_time_delta=False` drops those from the batch.
-                        seq_len_axis = out["code"].shape[1]
-                        static_mask = torch.arange(seq_len_axis).unsqueeze(0) < torch.as_tensor(
-                            n_static_seq_els
-                        ).unsqueeze(1)
-                        static_mask = static_mask.to(device=out["code"].device, dtype=torch.bool)
-
-                out["static_mask"] = static_mask
+                out["static_mask"] = self._span_mask(prefix_offsets, n_static, seq_len)
 
         if self.has_task_labels:
             out[self.LABEL_COL] = torch.Tensor([item[self.LABEL_COL] for item in batch]).bool()
@@ -1862,6 +2015,129 @@ class MEDSPytorchDataset(torch.utils.data.Dataset):
             out["n_subject_windows"] = torch.as_tensor(counts, dtype=torch.long)
 
         return MEDSTorchBatch(**out)
+
+    @staticmethod
+    def _span_mask(starts: torch.Tensor, lengths: torch.Tensor, seq_len: int) -> torch.BoolTensor:
+        """A `[batch_size, seq_len]` mask that is True on `[starts[i], starts[i] + lengths[i])` in row `i`.
+
+        Examples:
+            >>> MEDSPytorchDataset._span_mask(torch.tensor([0, 2]), torch.tensor([2, 1]), 4)
+            tensor([[ True,  True, False, False],
+                    [False, False,  True, False]])
+        """
+        positions = torch.arange(seq_len).unsqueeze(0)
+        return (positions >= starts.unsqueeze(1)) & (positions < (starts + lengths).unsqueeze(1))
+
+    def _insert_time_derived(self, out: dict[str, torch.Tensor], batch: list[dict], at: torch.Tensor) -> None:
+        """Insert each sample's time-derived block into the dense batch tensors in `out`, in place.
+
+        The block occupies `self._n_time_derived_seq_els` positions starting at `at[i]` in row `i`; every
+        tensor in `out` grows by that many positions along its sequence axis. Existing positions before
+        `at[i]` are kept and those from `at[i]` on shift right. In SM mode each time-derived measurement is
+        its own position; in SEM mode the block is one event holding all of them.
+
+        Examples:
+            >>> import dataclasses
+            >>> cfg = dataclasses.replace(sample_pytorch_dataset.config, age_token_mode="numeric")
+            >>> pyd = MEDSPytorchDataset(cfg, split="train")
+            >>> out = {
+            ...     "code": torch.tensor([[5, 6, 7], [8, 9, 0]]),
+            ...     "numeric_value": torch.tensor([[0.5, 0.0, 0.0], [1.0, 0.0, 0.0]]),
+            ...     "numeric_value_mask": torch.tensor([[True, False, False], [True, False, False]]),
+            ...     "time_delta_days": torch.tensor([[1.0, 2.0, 0.0], [3.0, 0.0, 0.0]]),
+            ... }
+            >>> batch = [
+            ...     {"time_derived_code": [12], "time_derived_numeric_value": [-0.25]},
+            ...     {"time_derived_code": [12], "time_derived_numeric_value": [float("nan")]},
+            ... ]
+            >>> pyd._insert_time_derived(out, batch, torch.tensor([0, 1]))
+            >>> for k, v in out.items():
+            ...     print(k, v.tolist())
+            code [[12, 5, 6, 7], [8, 12, 9, 0]]
+            numeric_value [[-0.25, 0.5, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]
+            numeric_value_mask [[True, True, False, False], [True, False, False, False]]
+            time_delta_days [[0.0, 1.0, 2.0, 0.0], [3.0, 0.0, 0.0, 0.0]]
+        """
+        n_positions = self._n_time_derived_seq_els
+        seq_len = out["code"].shape[1]
+        positions = torch.arange(seq_len + n_positions).unsqueeze(0)
+        is_new = (positions >= at.unsqueeze(1)) & (positions < (at + n_positions).unsqueeze(1))
+        source = torch.where(positions >= (at + n_positions).unsqueeze(1), positions - n_positions, positions)
+        source = source.clamp(max=seq_len - 1)  # new positions are overwritten below
+
+        def gather(tensor: torch.Tensor) -> torch.Tensor:
+            index = source.expand(tensor.shape[0], -1)
+            if tensor.dim() == 3:
+                index = index.unsqueeze(-1).expand(-1, -1, tensor.shape[2])
+            return tensor.gather(1, index)
+
+        codes = torch.as_tensor([item["time_derived_code"] for item in batch], dtype=torch.long)
+        values = torch.as_tensor([item["time_derived_numeric_value"] for item in batch], dtype=torch.float32)
+
+        for key in list(out):
+            out[key] = gather(out[key])
+
+        if self.config.batch_mode == BatchMode.SM:
+            fill = {
+                "code": codes,
+                "numeric_value": torch.nan_to_num(values, nan=0.0),
+                "numeric_value_mask": ~torch.isnan(values),
+                "time_delta_days": torch.zeros_like(values),
+            }
+            for key, new_values in fill.items():
+                if key in out:
+                    out[key][is_new] = new_values.reshape(-1).to(out[key].dtype)
+            return
+
+        # SEM: one new event per sample holding all `n_measurements` time-derived measurements.
+        n_measurements = codes.shape[1]
+        if n_measurements > out["code"].shape[2]:
+            pad = n_measurements - out["code"].shape[2]
+            for key in ("code", "numeric_value", "numeric_value_mask"):
+                if key in out:
+                    out[key] = torch.nn.functional.pad(out[key], (0, pad))
+        rows = torch.arange(len(batch))
+        cols = at
+        out["code"][rows, cols] = 0
+        out["code"][rows, cols, :n_measurements] = codes
+        if "numeric_value" in out:
+            out["numeric_value"][rows, cols] = 0.0
+            out["numeric_value"][rows, cols, :n_measurements] = torch.nan_to_num(values, nan=0.0)
+            out["numeric_value_mask"][rows, cols] = False
+            out["numeric_value_mask"][rows, cols, :n_measurements] = ~torch.isnan(values)
+        out["event_mask"][rows, cols] = True
+        if "time_delta_days" in out:
+            out["time_delta_days"][rows, cols] = 0.0
+
+    def _collate_age(
+        self, batch: list[dict], dynamic_starts: torch.Tensor, seq_len: int
+    ) -> dict[str, torch.Tensor]:
+        """Build the per-position `age` (and, with `n_age_bins`, `age_bin`) batch tensors.
+
+        Each sample's raw per-position ages (`item["age_years"]`, NaN where unknown) are standardized (and
+        quantized) and scattered to the sample's dynamic positions in one vectorized pass. Every other
+        position — padding, static, time-derived — and every unknown age gets `age = 0` (the training mean)
+        and `age_bin = 0`.
+        """
+        # The index arithmetic and scatter are done in numpy: `torch.repeat_interleave` is markedly slower
+        # on CPU for this many small segments.
+        sample_ages = [item["age_years"] for item in batch]
+        n_per_sample = np.fromiter((len(a) for a in sample_ages), dtype=np.int64, count=len(batch))
+        all_ages = np.concatenate(sample_ages) if sample_ages else np.zeros(0, dtype=np.float32)
+        known = ~np.isnan(all_ages)
+
+        rows = np.repeat(np.arange(len(batch)), n_per_sample)
+        sample_offsets = np.cumsum(n_per_sample) - n_per_sample
+        cols = np.arange(len(all_ages)) - np.repeat(sample_offsets - dynamic_starts.numpy(), n_per_sample)
+
+        age = np.zeros((len(batch), seq_len), dtype=np.float32)
+        age[rows, cols] = np.where(known, self.config.normalize_age(all_ages), 0.0)
+        out = {"age": torch.from_numpy(age)}
+        if self.config.n_age_bins is not None:
+            age_bin = np.zeros((len(batch), seq_len), dtype=np.int64)
+            age_bin[rows, cols] = np.where(known, self.config.quantize_age(np.nan_to_num(all_ages)) + 1, 0)
+            out["age_bin"] = torch.from_numpy(age_bin)
+        return out
 
     def get_dataloader(self, **kwargs) -> torch.utils.data.DataLoader:
         """Constructs a PyTorch DataLoader for this dataset using the dataset's custom collate function.

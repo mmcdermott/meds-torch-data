@@ -32,6 +32,7 @@ output_dir: ???
 stage_runner_fp: null
 do_overwrite: false
 do_reshard: false
+birth_code_regex: ^MEDS_BIRTH(//.*)?$
 log_dir: ${output_dir}/.logs
 
 You can override everything using the hydra `key=value` syntax; for example:

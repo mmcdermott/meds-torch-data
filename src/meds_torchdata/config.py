@@ -8,6 +8,7 @@ import logging
 from collections.abc import Generator
 from dataclasses import dataclass, fields
 from functools import cached_property
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +17,13 @@ from hydra.core.config_store import ConfigStore
 from nested_ragged_tensors.ragged_numpy import JointNestedRaggedTensorDict
 from omegaconf import open_dict
 
-from .types import BatchMode, PaddingSide, StaticInclusionMode, SubsequenceSamplingStrategy
+from .types import (
+    AgeTokenMode,
+    BatchMode,
+    PaddingSide,
+    StaticInclusionMode,
+    SubsequenceSamplingStrategy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +91,26 @@ class MEDSTorchDataConfig:
         include_time_delta: When False, `MEDSPytorchDataset.collate` skips the
             `time_delta_days` tensor. Useful for models that only consume the code stream and
             don't care about inter-event timing. Defaults to True. See issue #47.
+        age_token_mode: Whether to prepend a time-derived "age at the start of the window" measurement
+            to each sequence — `OMIT` (default), `NUMERIC` (an `AGE` code whose numeric value is the age,
+            standardized with the training-set age mean and standard deviation), or `QUANTIZED` (one code
+            per age bin; see `n_age_bins`). Time-derived measurements form their own block, placed after
+            any prepended static measurements and immediately before the first dynamic measurement,
+            independent of `static_inclusion_mode`; it is marked by the batch's `time_derived_mask` and
+            consumes `max_seq_len` budget (one measurement in SM mode, one event in SEM mode). Its codes are
+            allocated past the end of the tokenized vocabulary; see `vocab_size`, `base_vocab_size`, and
+            `time_derived_codes`.
+        n_age_bins: The number of equal-frequency age bins, with edges at quantiles of the training-set age
+            distribution recorded at preprocessing time. Required when `age_token_mode == QUANTIZED`; when
+            set and `include_age` is True, the batch also carries a per-position `age_bin` tensor.
+        include_age: When True, the collated batch carries a per-position `age` tensor: the subject's age
+            at each dynamic event, standardized with the training-set mean and standard deviation (and 0,
+            i.e. the mean, at padding, static, time-derived, and unknown-age positions). If `n_age_bins` is
+            set it also carries `age_bin` (`1..n_age_bins` at dynamic positions with known ages, 0
+            elsewhere). These are event-level (`[batch_size, n_events]`) in SEM mode and measurement-level
+            in SM mode, so a model can add an age-dependent embedding at every position. Defaults to False.
+            All age features need the subject `birth_time`s and training-set age statistics written by
+            `MTD_preprocess` (see its `birth_code_regex` option and the `fit_time_derived_stats` stage).
 
     Raises:
         FileNotFoundError: If the task_labels_dir or the tensorized_cohort_dir is not a valid directory.
@@ -302,6 +329,11 @@ class MEDSTorchDataConfig:
     include_numeric_value: bool = True
     include_time_delta: bool = True
 
+    # Time-derived measurements (currently, age). See the attribute docs above.
+    age_token_mode: AgeTokenMode = AgeTokenMode.OMIT
+    n_age_bins: int | None = None
+    include_age: bool = False
+
     @classmethod
     def add_to_config_store(cls, group: str | None = None):
         """Adds this class to the Hydra config store such that instantiation will create it natively.
@@ -327,6 +359,9 @@ class MEDSTorchDataConfig:
                              'include_subject_window_counts_in_batch': False,
                              'include_numeric_value': True,
                              'include_time_delta': True,
+                             'age_token_mode': <AgeTokenMode.OMIT: 'omit'>,
+                             'n_age_bins': None,
+                             'include_age': False,
                              '_target_': 'meds_torchdata.config.MEDSTorchDataConfig'},
                        group=None,
                        package=None,
@@ -355,6 +390,9 @@ class MEDSTorchDataConfig:
              'include_subject_window_counts_in_batch': False,
              'include_numeric_value': True,
              'include_time_delta': True,
+             'age_token_mode': <AgeTokenMode.OMIT: 'omit'>,
+             'n_age_bins': None,
+             'include_age': False,
              '_target_': 'meds_torchdata.config.MEDSTorchDataConfig'}
             >>> from hydra.utils import instantiate
             >>> instantiate(cfg)
@@ -370,7 +408,10 @@ class MEDSTorchDataConfig:
                                 step_through_overlap=None,
                                 include_subject_window_counts_in_batch=False,
                                 include_numeric_value=True,
-                                include_time_delta=True)
+                                include_time_delta=True,
+                                age_token_mode=<AgeTokenMode.OMIT: 'omit'>,
+                                n_age_bins=None,
+                                include_age=False)
 
         Note that Hydra's CLI parameters with structured configs recognize that the `StrEnum` classes are
         enums, but fails to recognize that they accept lowercased names as the names of the class members are
@@ -411,7 +452,10 @@ class MEDSTorchDataConfig:
                                 step_through_overlap=None,
                                 include_subject_window_counts_in_batch=False,
                                 include_numeric_value=True,
-                                include_time_delta=True)
+                                include_time_delta=True,
+                                age_token_mode=<AgeTokenMode.OMIT: 'omit'>,
+                                n_age_bins=None,
+                                include_age=False)
 
         You can also add the config to a group
 
@@ -432,6 +476,9 @@ class MEDSTorchDataConfig:
                              'include_subject_window_counts_in_batch': False,
                              'include_numeric_value': True,
                              'include_time_delta': True,
+                             'age_token_mode': <AgeTokenMode.OMIT: 'omit'>,
+                             'n_age_bins': None,
+                             'include_age': False,
                              '_target_': 'meds_torchdata.config.MEDSTorchDataConfig'},
                        group='my_group/my_subgroup',
                        package=None,
@@ -532,6 +579,50 @@ class MEDSTorchDataConfig:
                     "step_through_overlap may only be set when seq_sampling_strategy is STEP_THROUGH; "
                     f"got strategy {self.seq_sampling_strategy} with overlap {self.step_through_overlap!r}."
                 )
+
+        self._validate_age_options()
+
+    def _validate_age_options(self) -> None:
+        """Normalize and validate the time-derived (age) measurement options; called by `__post_init__`.
+
+        Examples:
+            >>> MEDSTorchDataConfig(tensorized_cohort_dir=".", max_seq_len=3, age_token_mode="foobar")
+            Traceback (most recent call last):
+                ...
+            ValueError: Invalid age token mode: foobar
+            >>> MEDSTorchDataConfig(tensorized_cohort_dir=".", max_seq_len=3, age_token_mode="quantized")
+            Traceback (most recent call last):
+                ...
+            ValueError: age_token_mode=quantized requires n_age_bins to be set.
+            >>> MEDSTorchDataConfig(tensorized_cohort_dir=".", max_seq_len=3, n_age_bins=1)
+            Traceback (most recent call last):
+                ...
+            ValueError: n_age_bins must be an integer >= 2 or None; got 1.
+
+            Unlike static data, the age token does not depend on `static_inclusion_mode`:
+
+            >>> cfg = MEDSTorchDataConfig(
+            ...     tensorized_cohort_dir=".", max_seq_len=3, age_token_mode="numeric",
+            ...     static_inclusion_mode="omit",
+            ... )
+            >>> cfg.age_token_mode, cfg.n_time_derived_measurements
+            (<AgeTokenMode.NUMERIC: 'numeric'>, 1)
+        """
+        match self.age_token_mode:
+            case str() if self.age_token_mode in {x.value for x in AgeTokenMode}:
+                self.age_token_mode = AgeTokenMode(self.age_token_mode)
+            case AgeTokenMode():  # pragma: no cover
+                pass
+            case _:
+                raise ValueError(f"Invalid age token mode: {self.age_token_mode}")
+
+        if self.n_age_bins is not None and (
+            isinstance(self.n_age_bins, bool) or not isinstance(self.n_age_bins, int) or self.n_age_bins < 2
+        ):
+            raise ValueError(f"n_age_bins must be an integer >= 2 or None; got {self.n_age_bins!r}.")
+
+        if self.age_token_mode == AgeTokenMode.QUANTIZED and self.n_age_bins is None:
+            raise ValueError("age_token_mode=quantized requires n_age_bins to be set.")
 
     def lock(self) -> None:
         """Lock this config against further mutation.
@@ -703,11 +794,12 @@ class MEDSTorchDataConfig:
         return self.tensorized_cohort_dir / "metadata" / "codes.parquet"
 
     @cached_property
-    def vocab_size(self) -> int:
-        """Reads the code indices from the metadata file and returns the size of the vocabulary.
+    def base_vocab_size(self) -> int:
+        """Reads the code indices from the metadata file and returns the size of the tokenized vocabulary.
 
-        The vocabulary size is the maximum index in the code metadata file plus one. This is a cached property
-        to avoid reading the file multiple times.
+        This is the maximum index in the code metadata file plus one, and excludes the codes of any
+        time-derived measurements (see `time_derived_codes`). This is a cached property to avoid reading the
+        file multiple times.
 
         Examples:
             >>> df = pl.DataFrame({"code/vocab_index": [0, 1, 3]})
@@ -717,11 +809,242 @@ class MEDSTorchDataConfig:
             ...     metadata_fp.parent.mkdir(parents=True)
             ...     df.write_parquet(metadata_fp)
             ...     cfg = MEDSTorchDataConfig(tensorized_root, max_seq_len=10)
-            ...     print(cfg.vocab_size)
+            ...     print(cfg.base_vocab_size)
             4
         """
         df = pl.read_parquet(self.code_metadata_fp, columns=["code/vocab_index"], use_pyarrow=True)
         return df.select(pl.col("code/vocab_index")).max().item() + 1
+
+    @property
+    def vocab_size(self) -> int:
+        """The total number of code indices batches from this config may contain.
+
+        This is `base_vocab_size` plus the number of `time_derived_codes` (e.g., age tokens), so it is the
+        right size for a model's code embedding table.
+
+        Examples:
+            >>> MEDSTorchDataConfig(tensorized_MEDS_dataset, max_seq_len=10).vocab_size
+            12
+            >>> cfg = MEDSTorchDataConfig(tensorized_MEDS_dataset, max_seq_len=10, age_token_mode="numeric")
+            >>> cfg.vocab_size
+            13
+            >>> MEDSTorchDataConfig(
+            ...     tensorized_MEDS_dataset, max_seq_len=10, age_token_mode="quantized", n_age_bins=4
+            ... ).vocab_size
+            17
+        """
+        return self.base_vocab_size + len(self.time_derived_codes)
+
+    @property
+    def time_derived_stats_fp(self) -> Path:
+        """The training-set statistics of time-derived measurements written by `MTD_preprocess`.
+
+        Examples:
+            >>> with tempfile.TemporaryDirectory() as tmpdir:
+            ...     cfg = MEDSTorchDataConfig(Path(tmpdir), max_seq_len=10)
+            >>> cfg.time_derived_stats_fp
+            PosixPath('/tmp/tmp.../metadata/time_derived_measurement_stats.parquet')
+        """
+        return self.tensorized_cohort_dir / "metadata" / "time_derived_measurement_stats.parquet"
+
+    @cached_property
+    def age_stats(self) -> dict:
+        """Training-set age statistics (in years): `n_observations`, `mean`, `std`, and a `quantiles` grid.
+
+        These are computed at preprocessing time over every non-birth event of every training subject with
+        a known birth time. `quantiles` holds the age at evenly spaced levels from 0 to 1 (inclusive).
+
+        Raises:
+            FileNotFoundError: If the cohort was preprocessed before time-derived statistics existed.
+            ValueError: If no training subject had a birth event (so no age statistics exist), or if the
+                ages have zero variance (so they cannot be standardized).
+
+        Examples:
+            >>> stats = MEDSTorchDataConfig(tensorized_MEDS_dataset, max_seq_len=10).age_stats
+            >>> stats["n_observations"], round(stats["mean"], 3), round(stats["std"], 3)
+            (16, 31.438, 1.512)
+            >>> len(stats["quantiles"]), bool((np.diff(stats["quantiles"]) >= 0).all())
+            (1001, True)
+
+            A cohort without the statistics file (e.g., preprocessed before this feature existed) fails with
+            a pointer to the fix:
+
+            >>> with tempfile.TemporaryDirectory() as tmpdir:
+            ...     MEDSTorchDataConfig(Path(tmpdir), max_seq_len=10).age_stats
+            Traceback (most recent call last):
+                ...
+            FileNotFoundError: Age features require training-set age statistics at
+            /tmp/tmp.../metadata/time_derived_measurement_stats.parquet, which cohorts preprocessed before
+            time-derived measurements existed do not have. Re-run preprocessing (`MTD_preprocess`).
+        """
+        fp = self.time_derived_stats_fp
+        if not fp.is_file():
+            raise FileNotFoundError(
+                f"Age features require training-set age statistics at {fp}, which cohorts preprocessed "
+                "before time-derived measurements existed do not have. Re-run preprocessing "
+                "(`MTD_preprocess`)."
+            )
+        rows = pl.read_parquet(fp, use_pyarrow=True).filter(pl.col("measurement") == "age").to_dicts()
+        if not rows or not rows[0]["n_observations"]:
+            raise ValueError(
+                f"No training subject had a birth event when {self.tensorized_cohort_dir} was preprocessed, "
+                "so age features are unavailable. Check `MTD_preprocess`'s `birth_code_regex`."
+            )
+        stats = rows[0]
+        if not stats["std"] > 0:
+            raise ValueError(
+                f"Training-set ages have zero variance (std={stats['std']}); cannot standardize."
+            )
+        return {**stats, "quantiles": np.asarray(stats["quantiles"], dtype=np.float64)}
+
+    @property
+    def uses_age(self) -> bool:
+        """Whether any age feature is enabled (and so subject birth times and age statistics are needed).
+
+        Examples:
+            >>> MEDSTorchDataConfig(".", max_seq_len=3).uses_age
+            False
+            >>> MEDSTorchDataConfig(".", max_seq_len=3, include_age=True).uses_age
+            True
+            >>> MEDSTorchDataConfig(".", max_seq_len=3, age_token_mode="numeric").uses_age
+            True
+        """
+        return self.include_age or self.age_token_mode != AgeTokenMode.OMIT
+
+    @property
+    def n_time_derived_measurements(self) -> int:
+        """The number of time-derived measurements prepended to each sequence (currently 0 or 1: age).
+
+        Examples:
+            >>> MEDSTorchDataConfig(".", max_seq_len=3).n_time_derived_measurements
+            0
+            >>> MEDSTorchDataConfig(".", max_seq_len=3, age_token_mode="numeric").n_time_derived_measurements
+            1
+        """
+        return 0 if self.age_token_mode == AgeTokenMode.OMIT else 1
+
+    @cached_property
+    def age_bin_edges(self) -> np.ndarray:
+        """The `n_age_bins - 1` interior edges (in years) of the equal-frequency age bins.
+
+        Edges are the training-set age quantiles at levels `1/n, ..., (n-1)/n`, interpolated from the
+        quantile grid in `age_stats`. Bin `i` (0-indexed) covers `[edge_{i-1}, edge_i)`, with the first and
+        last bins unbounded below and above, respectively.
+
+        Examples:
+            >>> cfg = MEDSTorchDataConfig(tensorized_MEDS_dataset, max_seq_len=10, n_age_bins=4)
+            >>> cfg.age_bin_edges.round(4)
+            array([29.3697, 32.0025, 32.0041])
+
+            Ties or tight clusters in the training distribution (as in this tiny synthetic cohort) yield
+            closely spaced edges; bins are never merged, so the number of bins (and of age codes) always
+            matches `n_age_bins`.
+        """
+        if self.n_age_bins is None:
+            raise ValueError("n_age_bins is not set, so there are no age bins.")
+        quantiles = self.age_stats["quantiles"]
+        levels = np.arange(1, self.n_age_bins) / self.n_age_bins
+        return np.interp(levels, np.linspace(0.0, 1.0, len(quantiles)), quantiles)
+
+    def age_bin_labels(self) -> list[str]:
+        """Human-readable labels for each age bin, in bin order.
+
+        Examples:
+            >>> MEDSTorchDataConfig(tensorized_MEDS_dataset, max_seq_len=10, n_age_bins=4).age_bin_labels()
+            ['(-inf, 29.3697)', '[29.3697, 32.0025)', '[32.0025, 32.0041)', '[32.0041, inf)']
+        """
+        bounds = [float("-inf"), *self.age_bin_edges.tolist(), float("inf")]
+        labels = []
+        for lo, hi in pairwise(bounds):
+            left = "(" if lo == float("-inf") else "["
+            labels.append(f"{left}{lo:.6g}, {hi:.6g})")
+        return labels
+
+    def quantize_age(self, age_years: np.ndarray) -> np.ndarray:
+        """Map ages (in years) to 0-indexed age bins (see `age_bin_edges`). NaNs must be masked by callers.
+
+        Examples:
+            >>> cfg = MEDSTorchDataConfig(tensorized_MEDS_dataset, max_seq_len=10, n_age_bins=4)
+            >>> cfg.quantize_age(np.array([0.0, 29.5, 32.003, 40.0]))
+            array([0, 1, 2, 3])
+        """
+        return np.digitize(age_years, self.age_bin_edges, right=False)
+
+    def normalize_age(self, age_years: np.ndarray) -> np.ndarray:
+        """Standardize ages (in years) with the training-set mean and standard deviation.
+
+        Examples:
+            >>> cfg = MEDSTorchDataConfig(tensorized_MEDS_dataset, max_seq_len=10)
+            >>> mean, std = cfg.age_stats["mean"], cfg.age_stats["std"]
+            >>> cfg.normalize_age(np.array([mean, mean + std]))
+            array([0., 1.])
+        """
+        return (np.asarray(age_years, dtype=np.float64) - self.age_stats["mean"]) / self.age_stats["std"]
+
+    @property
+    def time_derived_codes(self) -> dict[int, str]:
+        """Codes of the prepended time-derived measurements, by code index.
+
+        These are not in the tokenized vocabulary; they are allocated contiguously starting at
+        `base_vocab_size`. Currently these are only the age-token codes (see `age_token_mode`).
+
+        Examples:
+            >>> MEDSTorchDataConfig(tensorized_MEDS_dataset, max_seq_len=10).time_derived_codes
+            {}
+            >>> MEDSTorchDataConfig(
+            ...     tensorized_MEDS_dataset, max_seq_len=10, age_token_mode="numeric"
+            ... ).time_derived_codes
+            {12: 'AGE'}
+            >>> cfg = MEDSTorchDataConfig(
+            ...     tensorized_MEDS_dataset, max_seq_len=10, age_token_mode="quantized", n_age_bins=4
+            ... )
+            >>> for idx, name in cfg.time_derived_codes.items():
+            ...     print(idx, name)
+            12 AGE//(-inf, 29.3697)
+            13 AGE//[29.3697, 32.0025)
+            14 AGE//[32.0025, 32.0041)
+            15 AGE//[32.0041, inf)
+            16 AGE//UNKNOWN
+        """
+        match self.age_token_mode:
+            case AgeTokenMode.OMIT:
+                return {}
+            case AgeTokenMode.NUMERIC:
+                return {self.base_vocab_size: "AGE"}
+            case AgeTokenMode.QUANTIZED:
+                names = [f"AGE//{label}" for label in self.age_bin_labels()] + ["AGE//UNKNOWN"]
+                return {self.base_vocab_size + i: name for i, name in enumerate(names)}
+            case _:  # pragma: no cover
+                raise ValueError(f"Invalid age token mode: {self.age_token_mode}")
+
+    def age_token(self, age_years: float) -> tuple[int, float]:
+        """Return the `(code, numeric_value)` of the age measurement for an age, per `age_token_mode`.
+
+        Args:
+            age_years: The age in years, or NaN if unknown.
+
+        Examples:
+            >>> cfg = MEDSTorchDataConfig(tensorized_MEDS_dataset, max_seq_len=10, age_token_mode="numeric")
+            >>> code, value = cfg.age_token(cfg.age_stats["mean"] + 2 * cfg.age_stats["std"])
+            >>> code, round(value, 6)
+            (12, 2.0)
+            >>> cfg.age_token(float("nan"))
+            (12, nan)
+            >>> cfg = MEDSTorchDataConfig(
+            ...     tensorized_MEDS_dataset, max_seq_len=10, age_token_mode="quantized", n_age_bins=4
+            ... )
+            >>> cfg.age_token(10.0), cfg.age_token(40.0), cfg.age_token(float("nan"))
+            ((12, nan), (15, nan), (16, nan))
+        """
+        match self.age_token_mode:
+            case AgeTokenMode.NUMERIC:
+                return self.base_vocab_size, float(self.normalize_age(age_years))
+            case AgeTokenMode.QUANTIZED:
+                if np.isnan(age_years):
+                    return self.base_vocab_size + self.n_age_bins, float("nan")
+                return self.base_vocab_size + int(self.quantize_age(np.asarray([age_years]))[0]), float("nan")
+            case _:
+                raise ValueError(f"age_token_mode={self.age_token_mode} does not produce an age token.")
 
     @property
     def includes_static(self) -> bool:
@@ -822,7 +1145,9 @@ class MEDSTorchDataConfig:
         n_static_seq_els: int | None = None,
         rng: np.random.Generator | int | None = None,
         explicit_end: int | None = None,
-    ) -> JointNestedRaggedTensorDict:
+        n_time_derived_seq_els: int = 0,
+        return_bounds: bool = False,
+    ) -> JointNestedRaggedTensorDict | tuple[JointNestedRaggedTensorDict, int, int]:
         """This processes the dynamic data for a subject, including subsampling and flattening.
 
         Args:
@@ -841,9 +1166,15 @@ class MEDSTorchDataConfig:
                 is measurement-level precise regardless of how many measurements an event has.
                 ``None`` for every other caller — including ``STEP_THROUGH`` in SEM mode, which
                 goes through the normal ``STEP_THROUGH → TO_END`` sampler path.
+            n_time_derived_seq_els: The number of sequence elements reserved for prepended time-derived
+                measurements (see `age_token_mode`). This shrinks the dynamic window like
+                `n_static_seq_els` does in `PREPEND` mode, but applies in every static inclusion mode.
+            return_bounds: If True, also return the `[st, end)` bounds of the sampled window, in the batch
+                mode's unit (events in SEM mode, measurements in SM mode), relative to `data`.
 
         Returns:
-            The processed dynamic data, still in a `JointNestedRaggedTensorDict` format.
+            The processed dynamic data, still in a `JointNestedRaggedTensorDict` format, followed by the
+            window's `st` and `end` bounds if `return_bounds` is True.
 
         Examples:
             >>> from nested_ragged_tensors.ragged_numpy import pprint_dense
@@ -1031,6 +1362,21 @@ class MEDSTorchDataConfig:
                 ...
             ValueError: When self.static_inclusion_mode=prepend, n_static_seq_els must be a positive integer.
                 Got 0
+
+        Slots can also be reserved for prepended time-derived measurements, in any static inclusion mode,
+        and the sampled window's bounds can be returned alongside the window (here, the last 2 of the 14
+        flattened measurements):
+
+            >>> cfg = MEDSTorchDataConfig(".", max_seq_len=3, seq_sampling_strategy="to_end")
+            >>> window, st, end = cfg.process_dynamic_data(data, n_time_derived_seq_els=1, return_bounds=True)
+            >>> pprint_dense(window.to_dense())
+            code
+            [72 73]
+            .
+            time_delta
+            [0 0]
+            >>> st, end
+            (12, 14)
         """
 
         if self.batch_mode == BatchMode.SM:
@@ -1047,6 +1393,8 @@ class MEDSTorchDataConfig:
                 )
 
             max_seq_len -= n_static_seq_els
+
+        max_seq_len -= n_time_derived_seq_els
 
         # `explicit_end` (set by `STEP_THROUGH` in `BatchMode.SM`) semantically means "don't
         # go past this measurement". We can honor it by telling the sampler to act as if the
@@ -1065,4 +1413,6 @@ class MEDSTorchDataConfig:
         # overhang the right boundary or exceed `seq_len` for short sequences.
         st = max(0, st)
         end = min(effective_seq_len, end)
+        if return_bounds:
+            return data[st:end], st, end
         return data[st:end]

@@ -19,6 +19,7 @@ data/schemas/train/0.parquet:
   measurements_per_event:
     - [1, 1]
     - [1, 1]
+  birth_time: [null, null]
 data/event_seqs/train/0.parquet:
   subject_id: [1, 2]
   time_delta_days:

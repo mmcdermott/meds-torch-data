@@ -1,5 +1,6 @@
 """This file exports pytest fixtures for static pytorch datasets for downstream testing use."""
 
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -22,6 +23,9 @@ def tensorized_MEDS_dataset(simple_static_MEDS: Path) -> Path:
             "MTD_preprocess",
             f"MEDS_dataset_dir={simple_static_MEDS!s}",
             f"output_dir={cohort_dir!s}",
+            # The synthetic data records birth with a `DOB` code rather than the MEDS-standard
+            # `MEDS_BIRTH`. Quoted twice: once for Hydra's override grammar, once for the shell.
+            shlex.quote("birth_code_regex='^DOB$'"),
         ]
 
         out = subprocess.run(" ".join(command), shell=True, check=False, capture_output=True)

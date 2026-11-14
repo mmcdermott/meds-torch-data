@@ -77,6 +77,7 @@ meds_torchdata = "meds_torchdata.pytest_plugin"
 [project.entry-points."MEDS_transforms.stages"]
 tokenization = "meds_torchdata.preprocessing.tokenization:main"
 tensorization = "meds_torchdata.preprocessing.tensorization:main"
+fit_time_derived_stats = "meds_torchdata.preprocessing.fit_time_derived_stats:main"
 
 [project.entry-points."yaml_to_disk.file_types"]
 nrt = "meds_torchdata.preprocessing._nrt_file:NRTFile"
