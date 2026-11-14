@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778860019031,
+  "lastUpdate": 1794679337116,
   "repoUrl": "https://github.com/mmcdermott/meds-torch-data",
   "entries": {
     "Benchmark": [
@@ -24237,6 +24237,103 @@ window.BENCHMARK_DATA = {
             "name": "Usage/Duration/collate",
             "value": 0.030899739265441893,
             "range": "0.033669496885828716",
+            "unit": "seconds",
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/code",
+            "value": 28124.8,
+            "range": "8476.27859643868",
+            "unit": "bytes",
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/numeric_value",
+            "value": 14102.4,
+            "range": "4238.13929821934",
+            "unit": "bytes",
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/numeric_value_mask",
+            "value": 3585.6,
+            "range": "1059.534824554835",
+            "unit": "bytes",
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/time_delta_days",
+            "value": 14102.4,
+            "range": "4238.13929821934",
+            "unit": "bytes",
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/static_code",
+            "value": 3280,
+            "range": "944.466927836956",
+            "unit": "bytes",
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/static_numeric_value",
+            "value": 1680,
+            "range": "472.233463918478",
+            "unit": "bytes",
+            "extra": "Count: 10"
+          },
+          {
+            "name": "Outputs/BatchSize/static_numeric_value_mask",
+            "value": 480,
+            "range": "118.0583659796195",
+            "unit": "bytes",
+            "extra": "Count: 10"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "mmcdermott",
+            "username": "mmcdermott"
+          },
+          "committer": {
+            "name": "mmcdermott",
+            "username": "mmcdermott"
+          },
+          "id": "138ae65a6a2505d9dbc21cbbe7123116c33c4e0a",
+          "message": "Test that random subsequences vary across training epochs",
+          "timestamp": "2026-05-15T15:45:25Z",
+          "url": "https://github.com/mmcdermott/meds-torch-data/pull/119/commits/138ae65a6a2505d9dbc21cbbe7123116c33c4e0a"
+        },
+        "date": 1794679335252,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Usage/Duration/Epoch",
+            "value": 0.3607926,
+            "range": "0.029449599908996836",
+            "unit": "seconds",
+            "extra": "Count: 5"
+          },
+          {
+            "name": "Usage/Memory/benchmark",
+            "value": 1316769,
+            "range": "null",
+            "unit": "bytes",
+            "extra": "Count: 1"
+          },
+          {
+            "name": "Usage/Duration/__getitem__",
+            "value": 0.0007983032464981079,
+            "range": "0.001512817533641242",
+            "unit": "seconds",
+            "extra": "Count: 2000"
+          },
+          {
+            "name": "Usage/Duration/collate",
+            "value": 0.019391489028930665,
+            "range": "0.005280422551143045",
             "unit": "seconds",
             "extra": "Count: 10"
           },
