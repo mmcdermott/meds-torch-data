@@ -27,8 +27,10 @@ class MEDSTorchDataConfig:
 
     Attributes:
         tensorized_cohort_dir: Path to the root of a tokenized-and-tensorized MEDS cohort
-            produced by `MTD_preprocess`. The directory must contain `tokenization/schemas/`
-            and `data/` subdirectories.
+            produced by `MTD_preprocess`. The directory must contain `data/` (the tensorized
+            shards and, in `data/schemas/`, their schemas) and `metadata/`. Cohorts made with
+            MEDS-Transforms before 0.8 keep the schemas in `tokenization/schemas/` instead, which
+            is still read.
         max_seq_len: The maximum length (in the batch mode's natural unit — events in SEM
             mode, measurements in SM mode) of sequences yielded from the dataset. Samplers
             that produce fixed-width windows will use this as the width; `RANDOM` and
@@ -751,15 +753,23 @@ class MEDSTorchDataConfig:
     def schema_dir(self) -> Path:
         """Return the schema directory for the tensorized cohort.
 
-        The path need not exist to be returned.
+        That is ``data/schemas/``, unless only the pre-MEDS-Transforms-0.8 location,
+        ``tokenization/schemas/``, exists. The path need not exist to be returned.
 
         Examples:
             >>> with tempfile.TemporaryDirectory() as tmpdir:
             ...     cfg = MEDSTorchDataConfig(Path(tmpdir), max_seq_len=10)
-            >>> cfg.schema_dir
-            PosixPath('/tmp/tmp.../tokenization/schemas')
+            ...     print(cfg.schema_dir.relative_to(tmpdir))
+            ...     (Path(tmpdir) / "tokenization" / "schemas").mkdir(parents=True)
+            ...     print(cfg.schema_dir.relative_to(tmpdir))
+            data/schemas
+            tokenization/schemas
         """
-        return self.tensorized_cohort_dir / "tokenization" / "schemas"
+        schema_dir = self.tensorized_cohort_dir / "data" / "schemas"
+        legacy_dir = self.tensorized_cohort_dir / "tokenization" / "schemas"
+        if not schema_dir.is_dir() and legacy_dir.is_dir():
+            return legacy_dir
+        return schema_dir
 
     @property
     def schema_fps(self) -> Generator[tuple[str, Path], None, None]:
@@ -768,7 +778,7 @@ class MEDSTorchDataConfig:
         Examples:
             >>> with tempfile.TemporaryDirectory() as tmpdir:
             ...     tensorized_root = Path(tmpdir)
-            ...     schema_dir = tensorized_root / "tokenization" / "schemas"
+            ...     schema_dir = tensorized_root / "data" / "schemas"
             ...     schema_dir.mkdir(parents=True)
             ...     (schema_dir / "shard_A.parquet").touch()
             ...     (schema_dir / "shard_B.json").touch()
@@ -779,9 +789,9 @@ class MEDSTorchDataConfig:
             ...     cfg = MEDSTorchDataConfig(tensorized_root, max_seq_len=10)
             ...     for shard, fp in cfg.schema_fps:
             ...         print(shard, str(fp.relative_to(tensorized_root)))
-            shard_A tokenization/schemas/shard_A.parquet
-            shard_C/0 tokenization/schemas/shard_C/0.parquet
-            shard_C/1 tokenization/schemas/shard_C/1.parquet
+            shard_A data/schemas/shard_A.parquet
+            shard_C/0 data/schemas/shard_C/0.parquet
+            shard_C/1 data/schemas/shard_C/1.parquet
         """
 
         for schema_fp in sorted(self.schema_dir.rglob("*.parquet")):

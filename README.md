@@ -248,12 +248,12 @@ file-path related properties and helpers:
 >>> cfg.tensorized_cohort_dir
 PosixPath('/tmp/tmp...')
 >>> cfg.schema_dir
-PosixPath('/tmp/tmp.../tokenization/schemas')
+PosixPath('/tmp/tmp.../data/schemas')
 >>> print(sorted(list(cfg.schema_fps)))
-[('held_out/0', PosixPath('/tmp/tmp.../tokenization/schemas/held_out/0.parquet')),
- ('train/0', PosixPath('/tmp/tmp.../tokenization/schemas/train/0.parquet')),
- ('train/1', PosixPath('/tmp/tmp.../tokenization/schemas/train/1.parquet')),
- ('tuning/0', PosixPath('/tmp/tmp.../tokenization/schemas/tuning/0.parquet'))]
+[('held_out/0', PosixPath('/tmp/tmp.../data/schemas/held_out/0.parquet')),
+ ('train/0', PosixPath('/tmp/tmp.../data/schemas/train/0.parquet')),
+ ('train/1', PosixPath('/tmp/tmp.../data/schemas/train/1.parquet')),
+ ('tuning/0', PosixPath('/tmp/tmp.../data/schemas/tuning/0.parquet'))]
 >>> print(cfg.task_labels_dir)
 None
 >>> print(cfg.task_labels_fps)
@@ -418,7 +418,7 @@ If you use a non-existent split or have something misconfigured, you'll get an e
 >>> pyd_bad = MEDSPytorchDataset(cfg, split="bad_split")
 Traceback (most recent call last):
     ...
-FileNotFoundError: No schema files found in /tmp/.../tokenization/schemas! If your data is not sharded by
+FileNotFoundError: No schema files found in /tmp/.../data/schemas! If your data is not sharded by
 split, this error may occur because this codebase does not handle non-split sharded data. See Issue #79 for
 tracking this issue.
 

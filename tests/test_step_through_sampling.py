@@ -108,7 +108,7 @@ def test_step_through_sm_errors_on_old_cohort_missing_column(tensorized_MEDS_dat
 
     # Rewrite every schema parquet without the `measurements_per_event` column.
     stripped_any = False
-    for schema_fp in (old_cohort / "tokenization" / "schemas").rglob("*.parquet"):
+    for schema_fp in (old_cohort / "data" / "schemas").rglob("*.parquet"):
         df = pl.read_parquet(schema_fp)
         if "measurements_per_event" in df.columns:
             df.drop("measurements_per_event").write_parquet(schema_fp)
