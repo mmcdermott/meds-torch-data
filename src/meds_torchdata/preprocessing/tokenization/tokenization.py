@@ -9,6 +9,8 @@ columns of concern here thus are `subject_id`, `time`, `code`, `numeric_value`.
 """
 
 import logging
+from collections.abc import Collection
+from functools import partial
 from pathlib import Path
 
 import polars as pl
@@ -104,11 +106,15 @@ def split_static_and_dynamic(df: pl.LazyFrame) -> tuple[pl.LazyFrame, pl.LazyFra
     return static, dynamic
 
 
-def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
+def extract_statics_and_schema(df: pl.LazyFrame, birth_codes: Collection[int] = ()) -> pl.LazyFrame:
     """This function extracts static data and schema information (sequence of subject unique times).
 
     Args:
         df: The input data.
+        birth_codes: The (normalized, integer) codes that mark a subject's birth. Each subject's
+            `birth_time` is the earliest time of any of these codes, or null if the subject has none (or
+            if no birth codes are given). This is consumed by the time-derived age features of
+            `MEDSPytorchDataset`.
 
     Returns:
         A `pl.LazyFrame` object containing the static data and the unique times of the subject, grouped
@@ -116,7 +122,7 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
         subject also carries a `measurements_per_event` list, parallel to the `time` list, giving the
         number of raw measurements (rows in the source dataframe) at each unique timestamp. This column
         is needed by `STEP_THROUGH` sampling in `BatchMode.SM` to map measurement-level window ends back
-        to event-level indices.
+        to event-level indices. Each subject also carries a `birth_time` (see `birth_codes`).
 
     Examples:
         >>> from datetime import datetime
@@ -129,7 +135,7 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
         ...     "numeric_value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
         ... }).lazy()
         >>> df = extract_statics_and_schema(df).collect()
-        >>> df.drop("time", "measurements_per_event")
+        >>> df.drop("time", "measurements_per_event", "birth_time")
         shape: (2, 4)
         ┌────────────┬─────────────┬──────────────────────┬─────────────────────┐
         │ subject_id ┆ static_code ┆ static_numeric_value ┆ start_time          │
@@ -161,7 +167,7 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
         ...     "numeric_value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
         ... }).lazy()
         >>> df = extract_statics_and_schema(df).collect()
-        >>> df.drop("time", "measurements_per_event")
+        >>> df.drop("time", "measurements_per_event", "birth_time")
         shape: (2, 4)
         ┌────────────┬─────────────┬──────────────────────┬─────────────────────┐
         │ subject_id ┆ static_code ┆ static_numeric_value ┆ start_time          │
@@ -186,6 +192,30 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
         │ 2          ┆ 2020-01-01 00:00:00 ┆ 1                      │
         │ 2          ┆ 2021-01-02 00:00:00 ┆ 2                      │
         └────────────┴─────────────────────┴────────────────────────┘
+
+        If `birth_codes` are given, each subject's `birth_time` is the earliest time any of them occurs (and
+        null for subjects without one). By default no birth codes are used and `birth_time` is all null:
+
+        >>> df = pl.DataFrame({
+        ...     "subject_id": [1, 1, 1, 2, 2],
+        ...     "time": [
+        ...         None, datetime(1990, 5, 1), datetime(2021, 1, 1), None, datetime(2021, 1, 2),
+        ...     ],
+        ...     "code": [100, 7, 101, 200, 201],
+        ...     "numeric_value": [1.0, None, 2.0, 3.0, 4.0],
+        ... }).lazy()
+        >>> extract_statics_and_schema(df, birth_codes=[7, 8]).collect().select("subject_id", "birth_time")
+        shape: (2, 2)
+        ┌────────────┬─────────────────────┐
+        │ subject_id ┆ birth_time          │
+        │ ---        ┆ ---                 │
+        │ i64        ┆ datetime[μs]        │
+        ╞════════════╪═════════════════════╡
+        │ 1          ┆ 1990-05-01 00:00:00 │
+        │ 2          ┆ null                │
+        └────────────┴─────────────────────┘
+        >>> extract_statics_and_schema(df).collect()["birth_time"].to_list()
+        [None, None]
 
         Source order is preserved across the full-outer join, not re-sorted by `subject_id`.
         The input below has subject IDs `[7, 3, 5, 2, 7, 5]` — non-monotonic in either direction,
@@ -245,8 +275,15 @@ def extract_statics_and_schema(df: pl.LazyFrame) -> pl.LazyFrame:
     # explicit first-occurrence-in-source index and sort by it after the join.
     subject_order = df.select("subject_id").unique(maintain_order=True).with_row_index("_subject_order")
 
+    birth_by_subject = (
+        dynamic.filter(pl.col("code").is_in(list(birth_codes)))
+        .group_by("subject_id")
+        .agg(pl.col("time").min().alias("birth_time"))
+    )
+
     return (
         static_by_subject.join(schema_by_subject, on="subject_id", how="full", coalesce=True)
+        .join(birth_by_subject, on="subject_id", how="left")
         .join(subject_order, on="subject_id", how="left")
         .sort("_subject_order")
         .drop("_subject_order")
@@ -306,6 +343,56 @@ def extract_seq_of_subject_events(df: pl.LazyFrame) -> pl.LazyFrame:
     )
 
 
+def resolve_birth_codes(stage_cfg: DictConfig) -> list[int]:
+    """Resolve `stage_cfg.birth_code_regex` to the vocabulary indices of matching codes.
+
+    The regex is matched against the `code` column of `codes.parquet` in the stage's metadata input
+    directory (which, in the MTD pipeline, carries `code/vocab_index` from `fit_vocabulary_indices`). If the
+    regex is null, the metadata file is absent, or nothing matches, no birth codes are used (with a warning
+    in the latter two cases), and every subject's `birth_time` will be null.
+
+    Examples:
+        >>> code_metadata = pl.DataFrame({
+        ...     "code": ["MEDS_BIRTH", "MEDS_BIRTH//US", "HR", "NOT_MEDS_BIRTH"],
+        ...     "code/vocab_index": [3, 4, 1, 2],
+        ... })
+        >>> with tempfile.TemporaryDirectory() as tmpdir:
+        ...     code_metadata.write_parquet(Path(tmpdir) / "codes.parquet")
+        ...     stage_cfg = OmegaConf.create({
+        ...         "metadata_input_dir": tmpdir, "birth_code_regex": "^MEDS_BIRTH(//.*)?$"
+        ...     })
+        ...     print(resolve_birth_codes(stage_cfg))
+        ...     stage_cfg.birth_code_regex = "^DOB$"
+        ...     print(resolve_birth_codes(stage_cfg))
+        ...     stage_cfg.birth_code_regex = None
+        ...     print(resolve_birth_codes(stage_cfg))
+        [3, 4]
+        []
+        []
+        >>> stage_cfg = OmegaConf.create({"metadata_input_dir": "/nonexistent", "birth_code_regex": "X"})
+        >>> resolve_birth_codes(stage_cfg)
+        []
+    """
+    regex = stage_cfg.get("birth_code_regex", None)
+    if regex is None:
+        return []
+
+    metadata_fp = Path(stage_cfg.metadata_input_dir) / "codes.parquet"
+    if not metadata_fp.is_file():
+        logger.warning(
+            f"No code metadata at {metadata_fp}; cannot resolve birth codes, so birth_time is null."
+        )
+        return []
+
+    code_metadata = pl.read_parquet(metadata_fp, columns=["code", "code/vocab_index"], use_pyarrow=True)
+    matches = code_metadata.filter(pl.col("code").str.contains(regex)).sort("code/vocab_index")
+    if len(matches) == 0:
+        logger.warning(f"No codes match birth_code_regex={regex!r}; every subject's birth_time will be null.")
+        return []
+    logger.info(f"Using birth codes {matches['code'].to_list()} (birth_code_regex={regex!r}).")
+    return matches["code/vocab_index"].cast(pl.Int64).to_list()
+
+
 @Stage.register(is_metadata=False, example_class=MTDStageExample)
 def main(cfg: DictConfig):
     """Tokenizes the dataset in accordance with the aggregated code metadata.
@@ -339,6 +426,7 @@ def main(cfg: DictConfig):
     output_dir = Path(cfg.stage_cfg.output_dir)
     if train_only := cfg.stage_cfg.get("train_only", False):
         raise ValueError(f"train_only={train_only} is not supported for this stage.")
+    birth_codes = resolve_birth_codes(cfg.stage_cfg)
     shards_single_output, _ = shard_iterator(cfg)
 
     for in_fp, out_fp in shards_single_output:
@@ -354,7 +442,7 @@ def main(cfg: DictConfig):
             schema_out_fp,
             pl.scan_parquet,
             write_df,
-            extract_statics_and_schema,
+            partial(extract_statics_and_schema, birth_codes=birth_codes),
             do_overwrite=cfg.do_overwrite,
         )
 

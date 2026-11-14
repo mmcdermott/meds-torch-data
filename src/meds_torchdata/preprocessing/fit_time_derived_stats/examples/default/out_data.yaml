@@ -1,0 +1,19 @@
+# One training observation: subject 1's non-birth event, 10 days (10 / 365.25 years) after birth. The
+# code metadata is passed through unchanged.
+metadata/codes.parquet:
+  code: [MEDS_BIRTH, HR]
+  code/vocab_index: [10, 12]
+metadata/time_derived_measurement_stats.parquet:
+  measurement: [age]
+  unit: [years]
+  n_observations: [1]
+  mean: [0.027378507871321012]
+  std: [0.0]
+  quantiles:
+    - [
+        0.027378507871321012,
+        0.027378507871321012,
+        0.027378507871321012,
+        0.027378507871321012,
+        0.027378507871321012,
+      ]

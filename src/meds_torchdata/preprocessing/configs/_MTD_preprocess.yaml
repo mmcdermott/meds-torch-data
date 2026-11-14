@@ -3,6 +3,11 @@ output_dir: ${oc.env:OUTPUT_DIR}
 
 etl_metadata.pipeline_name: "tensorization"
 
+# Regex over code-metadata `code` strings identifying birth codes; used by `tokenization` to record each
+# subject's `birth_time`, from which time-derived age features are computed. Overridable via
+# `MTD_preprocess birth_code_regex=...`.
+birth_code_regex: "^MEDS_BIRTH(//.*)?$"
+
 stages:
   - fit_normalization:
       aggregations:
@@ -14,5 +19,7 @@ stages:
     _base_stage: aggregate_code_metadata
   - fit_vocabulary_indices
   - normalization
-  - tokenization
+  - tokenization:
+      birth_code_regex: ${birth_code_regex}
+  - fit_time_derived_stats
   - tensorization

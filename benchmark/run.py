@@ -2,7 +2,6 @@ import json
 import sys
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -108,10 +107,25 @@ def benchmark(dataset, batch_size: int, num_epochs: int = 1) -> tuple[dict[str, 
     return sizes, epoch_durations
 
 
+# Age-feature configurations to profile. `None` is the default (age features off), profiled on the
+# standard benchmark dataset and written to the published `output_{...}.json`; the others run on the
+# same data plus one birth event per subject and write `output_{...}_{name}.json` alongside it.
+AGE_CONFIGS = {
+    None: {},
+    "age_off_with_births": {},  # Like-for-like baseline for the age configs below (same data).
+    "include_age": {"include_age": True},
+    "numeric_age_token": {"age_token_mode": "numeric"},
+    "all_age_features": {"include_age": True, "age_token_mode": "quantized", "n_age_bins": 10},
+}
+
+
+@pytest.mark.parametrize("age_config", list(AGE_CONFIGS), ids=lambda c: c or "default")
 @pytest.mark.parametrize("batch_size", [256])
 @pytest.mark.parametrize("max_seq_len", [512])
 @pytest.mark.parametrize("num_epochs", [5])
-def test_profile(benchmark_dataset: Path, batch_size: int, max_seq_len: int, num_epochs: int):
+def test_profile(request, batch_size: int, max_seq_len: int, num_epochs: int, age_config: str | None):
+    dataset_fixture = "benchmark_dataset" if age_config is None else "benchmark_dataset_with_births"
+    benchmark_dataset = request.getfixturevalue(dataset_fixture)
     methods_to_track = ["__getitem__", "collate"]
 
     TrackableDataset: type[MEDSPytorchDataset] = add_mixin(  # noqa: N806
@@ -127,6 +141,7 @@ def test_profile(benchmark_dataset: Path, batch_size: int, max_seq_len: int, num
     config = MEDSTorchDataConfig(
         tensorized_cohort_dir=benchmark_dataset,
         max_seq_len=max_seq_len,
+        **AGE_CONFIGS[age_config],
     )
 
     D = TrackableDataset(config, split="train")
@@ -141,6 +156,7 @@ def test_profile(benchmark_dataset: Path, batch_size: int, max_seq_len: int, num
 
     final_json_output = summarize_output(out)
 
-    output_fp = OUTPUT_DIR / f"output_{batch_size}_{max_seq_len}_{num_epochs}.json"
+    suffix = "" if age_config is None else f"_{age_config}"
+    output_fp = OUTPUT_DIR / f"output_{batch_size}_{max_seq_len}_{num_epochs}{suffix}.json"
     output_fp.parent.mkdir(parents=True, exist_ok=True)
     output_fp.write_text(json.dumps(final_json_output))

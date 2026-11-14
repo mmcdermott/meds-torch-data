@@ -1,0 +1,26 @@
+# Chains from `tokenization/default`'s output: only subject 1 (train/0) has a birth time, with one
+# non-birth event 10 days later. Event-sequence shards are irrelevant to this stage and are omitted.
+data/schemas/train/0.parquet:
+  subject_id: [1, 2]
+  time:
+    - [2020-01-01 00:00:00, 2020-01-11 00:00:00]
+    - [2021-06-01 00:00:00, 2021-06-03 00:00:00]
+  birth_time: [2020-01-01 00:00:00, null]
+data/schemas/train/1.parquet:
+  subject_id: [3]
+  time:
+    - [2019-03-15 00:00:00]
+  birth_time: [null]
+data/schemas/tuning/0.parquet:
+  subject_id: [4]
+  time:
+    - [2022-02-02 00:00:00]
+  birth_time: [null]
+data/schemas/held_out/0.parquet:
+  subject_id: [5]
+  time:
+    - [2018-04-04 00:00:00, 2018-04-14 00:00:00]
+  birth_time: [null]
+metadata/codes.parquet:
+  code: [MEDS_BIRTH, HR]
+  code/vocab_index: [10, 12]

@@ -21,6 +21,7 @@ data/schemas/train/0.parquet:
   measurements_per_event:
     - [1, 1]
     - [1, 1]
+  birth_time: [2020-01-01 00:00:00, null]
 data/schemas/train/1.parquet:
   subject_id: [3]
   static_code:
@@ -33,6 +34,7 @@ data/schemas/train/1.parquet:
     - [2019-03-15 00:00:00]
   measurements_per_event:
     - [1]
+  birth_time: [null]
 data/schemas/tuning/0.parquet:
   subject_id: [4]
   static_code:
@@ -45,6 +47,7 @@ data/schemas/tuning/0.parquet:
     - [2022-02-02 00:00:00]
   measurements_per_event:
     - [1]
+  birth_time: [null]
 data/schemas/held_out/0.parquet:
   subject_id: [5]
   static_code:
@@ -57,6 +60,7 @@ data/schemas/held_out/0.parquet:
     - [2018-04-04 00:00:00, 2018-04-14 00:00:00]
   measurements_per_event:
     - [1, 1]
+  birth_time: [null]
 
 data/event_seqs/train/0.parquet:
   subject_id: [1, 2]

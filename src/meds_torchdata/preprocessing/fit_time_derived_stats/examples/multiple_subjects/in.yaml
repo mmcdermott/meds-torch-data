@@ -1,0 +1,30 @@
+# Two training shards with three subjects with known birth times (one with an event recorded before
+# birth) and one without. The tuning and held-out subjects have birth times but must be ignored, as
+# statistics are fit on the training split only. Birth events themselves are excluded.
+#   subject 1: born 2000-01-01; events at ages 10.0014 and 20.0005 (+ the birth event)
+#   subject 2: no birth time (ignored)
+#   subject 3: born 1990-01-01; events at ages -0.9993 (pre-birth) and 30.0014 (+ the birth event)
+data/schemas/train/0.parquet:
+  subject_id: [1, 2]
+  time:
+    - [2000-01-01 00:00:00, 2010-01-01 00:00:00, 2020-01-01 00:00:00]
+    - [2021-06-01 00:00:00]
+  birth_time: [2000-01-01 00:00:00, null]
+data/schemas/train/1.parquet:
+  subject_id: [3]
+  time:
+    - [1989-01-01 00:00:00, 1990-01-01 00:00:00, 2020-01-01 00:00:00]
+  birth_time: [1990-01-01 00:00:00]
+data/schemas/tuning/0.parquet:
+  subject_id: [4]
+  time:
+    - [1900-01-01 00:00:00, 2000-01-01 00:00:00]
+  birth_time: [1900-01-01 00:00:00]
+data/schemas/held_out/0.parquet:
+  subject_id: [5]
+  time:
+    - [1950-01-01 00:00:00, 2020-01-01 00:00:00]
+  birth_time: [1950-01-01 00:00:00]
+metadata/codes.parquet:
+  code: [MEDS_BIRTH]
+  code/vocab_index: [1]

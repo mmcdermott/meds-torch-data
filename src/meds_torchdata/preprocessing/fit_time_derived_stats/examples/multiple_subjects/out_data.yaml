@@ -1,0 +1,15 @@
+# Four training observations (birth events excluded; tuning / held-out and birth-less subjects
+# ignored): ages [-0.9993, 10.0014, 20.0000, 29.9986]. Mean and (population) std are exact; the 0 / 1
+# quantiles are the exact extrema and the median is the inverse-CDF value, resolved to the upper edge of
+# the 1-day histogram bin containing the 2nd-smallest age.
+metadata/codes.parquet:
+  code: [MEDS_BIRTH]
+  code/vocab_index: [1]
+metadata/time_derived_measurement_stats.parquet:
+  measurement: [age]
+  unit: [years]
+  n_observations: [4]
+  mean: [14.750171115674195]
+  std: [11.518177877908782]
+  quantiles:
+    - [-0.999315537303217, 10.002737850787133, 29.998631074606433]

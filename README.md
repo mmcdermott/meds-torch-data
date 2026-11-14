@@ -209,9 +209,9 @@ Data processing parameters include:
     `keys=` subset, so code-only models don't pay the per-batch I/O or GPU transfer for data they ignore.
 - `include_time_delta`: If `False` (defaults to `True`), drop `time_delta_days` from the collated batch
     (surfaced as `None`) and skip it at load time. Useful when the model doesn't consume inter-event timing.
-- `include_age`, `age_token_mode`, `age_bin_edges_years`, `birth_codes`: Time-derived age features —
-    a per-position age tensor and/or an "age at the start of the window" token. See
-    [Time-derived age features](#time-derived-age-features) below.
+- `age_token_mode`, `n_age_bins`, `include_age`: Time-derived age measurements — an "age at the start of
+    the window" token and/or a per-position age tensor. See
+    [Time-derived measurements (age)](#time-derived-measurements-age) below.
 
 Of these, `seq_sampling_strategy` and `static_inclusion_mode` are restricted, and must be of the
 [`SubsequenceSamplingStrategy`](https://meds-torch-data.readthedocs.io/en/latest/api/meds_torchdata/config/#meds_torchdata.config.SubsequenceSamplingStrategy)
@@ -1207,6 +1207,7 @@ output_dir: ???
 stage_runner_fp: null
 do_overwrite: false
 do_reshard: false
+birth_code_regex: ^MEDS_BIRTH(//.*)?$
 log_dir: ${output_dir}/.logs
 
 You can override everything using the hydra `key=value` syntax; for example:
@@ -1222,8 +1223,12 @@ The `MTD_preprocess` command runs the following pre-processing stages:
     they can be transformed to numerical indices for tensorization.
 3. _`normalization`_: Normalizing the data using the parameters fit in the `fit_normalization` stage to have a
     mean of 0 and a standard deviation of 1.
-4. _`tokenization`_: Producing the schema files necessary for the tensorization stage.
-5. _`tensorization`_: Producing the nested ragged tensor views of the data.
+4. _`tokenization`_: Producing the schema files necessary for the tensorization stage, including each
+    subject's `birth_time` (the earliest time of any code matching `birth_code_regex`).
+5. _`fit_time_derived_stats`_: Fitting training-set statistics of
+    [time-derived measurements](#time-derived-measurements-age) — currently the mean, standard deviation,
+    and quantiles of subjects' ages over every non-birth training event — used to standardize and bin them.
+6. _`tensorization`_: Producing the nested ragged tensor views of the data.
 
 > [!NOTE]
 > If you would like additional normalization options to be supported, please comment on the upstream issue in
@@ -1287,75 +1292,95 @@ MEDSTorchDataConfig.add_to_config_store("dataset/config")
 This will add the `MEDSTorchDataConfig` to the Hydra config store in the nested `dataset/config` group, which
 will allow you to override its parameters from the command line and instantiate it into object form natively.
 
-### Time-derived age features
+### Time-derived measurements (age)
 
-Models often benefit from knowing the subject's _age_, but a sampled window only carries relative
-`time_delta_days`. The dataset can derive ages at load time, from the per-event timestamps in the subject
-schema and the time of the subject's first birth event (any of `birth_codes`, default
-`["MEDS_BIRTH"]`), with no re-preprocessing required. Two complementary features are available:
+_Time-derived measurements_ are values computed from a subject's timeline rather than read from the data.
+The first such measurement supported is the subject's **age**, computed from the per-event timestamps and
+each subject's birth time. Both are recorded at preprocessing time: `MTD_preprocess` stores each subject's
+`birth_time` (the earliest event with a code matching `birth_code_regex`, by default the MEDS-standard
+`MEDS_BIRTH`), and the `fit_time_derived_stats` stage records the training-set mean, standard deviation,
+and quantiles of age over every non-birth event. (Birth events are excluded because birth typically
+precedes all other events by years, so including it would add a spurious age-0 point per subject.)
 
-1. **Per-position age** (`include_age=True`): the batch gains `age_years` (the age at each dynamic event,
-    in years; event-level in SEM mode and measurement-level in SM mode) and `age_mask` (`False` at padding,
-    static, and unknown-age positions), so a model can add an age-dependent embedding at every position.
-    If `age_bin_edges_years` is set, an `age_bin` tensor (`0` where masked, `1..n_bins` otherwise) is
-    included too, for use with an `nn.Embedding(n_bins + 1, ...)`.
-2. **Age token** (`age_token_mode="numeric"` or `"quantized"`): one extra static measurement holding the
-    age at the first event of the sampled window, appended after the subject's static measurements. It
-    therefore follows `static_inclusion_mode` (`"include"` or `"prepend"`; in `"prepend"` mode it sits right
-    before the first dynamic measurement and counts against `max_seq_len`). `"numeric"` uses a single `AGE`
-    code with the age (in years) as its numeric value; `"quantized"` uses one code per age bin of
-    `age_bin_edges_years`, plus an `AGE//UNKNOWN` code for subjects without a birth event.
+Two complementary features use them:
 
-Age-token codes are allocated just past the tokenized vocabulary: `cfg.base_vocab_size` is the tokenized
-vocabulary, `cfg.vocab_size` includes the derived codes (so it remains the right size for an embedding
-table), and `cfg.derived_codes` names them. In the synthetic data, birth is recorded with a `DOB` code:
+1. **Age token** (`age_token_mode="numeric"` or `"quantized"`): one time-derived measurement holding the
+    subject's age at the first event of the sampled window, prepended as its own block — after any
+    prepended static data and immediately before the first dynamic measurement, in _every_
+    `static_inclusion_mode` — and marked by the batch's `time_derived_mask` (distinct from `static_mask`).
+    It counts against `max_seq_len` (one measurement in SM mode; one event in SEM mode). In `"numeric"` mode
+    it is an `AGE` code whose `numeric_value` is the standardized age; in `"quantized"` mode it is one of
+    `n_age_bins` equal-frequency age-bin codes (with edges at training-set age quantiles), plus an
+    `AGE//UNKNOWN` code for subjects without a birth event.
+2. **Per-position age** (`include_age=True`): the batch gains `age`, the standardized age at each dynamic
+    position (event-level in SEM mode, measurement-level in SM mode), so a model can add an age-dependent
+    embedding at every position. If `n_age_bins` is set, `age_bin` (`1..n_age_bins`) is included too, for
+    an `nn.Embedding(n_age_bins + 1, ...)`. Positions with no age information — padding, static,
+    time-derived, or a subject without a birth event — get `age = 0` (the training mean) and `age_bin = 0`,
+    so no separate mask is needed.
+
+Time-derived codes are allocated just past the tokenized vocabulary: `cfg.base_vocab_size` is the
+tokenized vocabulary, `cfg.vocab_size` includes the time-derived codes (so it remains the right size for an
+embedding table), and `cfg.time_derived_codes` names them. (The synthetic data used here records birth with
+a `DOB` code, which the test fixture passes to `MTD_preprocess` as `birth_code_regex`.)
 
 ```python
 >>> cfg = MEDSTorchDataConfig(
 ...     tensorized_MEDS_dataset,
-...     max_seq_len=6,
+...     max_seq_len=8,
 ...     seq_sampling_strategy="to_end",
 ...     static_inclusion_mode="prepend",
-...     birth_codes=["DOB"],
-...     include_age=True,
 ...     age_token_mode="quantized",
-...     age_bin_edges_years=[18, 30, 65],
+...     n_age_bins=3,
+...     include_age=True,
 ... )
 >>> cfg.base_vocab_size, cfg.vocab_size
-(12, 17)
->>> cfg.derived_codes
-{12: 'AGE//(-inf, 18)', 13: 'AGE//[18, 30)', 14: 'AGE//[30, 65)', 15: 'AGE//[65, inf)', 16: 'AGE//UNKNOWN'}
+(12, 16)
+>>> for code, name in cfg.time_derived_codes.items():
+...     print(code, name)
+12 AGE//(-inf, 32.0015)
+13 AGE//[32.0015, 32.0036)
+14 AGE//[32.0036, inf)
+15 AGE//UNKNOWN
 >>> pyd = MEDSPytorchDataset(cfg, split="train")
 >>> batch = pyd.collate([pyd[i] for i in range(4)])
 >>> batch.code
-tensor([[ 7,  9, 13, 10, 11,  4],
-        [ 6,  9, 14, 10, 11,  4],
-        [ 8,  9, 14, 10, 11,  4],
-        [ 8,  9, 14, 10, 11,  4]])
->>> batch.static_mask
-tensor([[ True,  True,  True, False, False, False],
-        [ True,  True,  True, False, False, False],
-        [ True,  True,  True, False, False, False],
-        [ True,  True,  True, False, False, False]])
->>> batch.age_years
-tensor([[ 0.0000,  0.0000,  0.0000, 29.3683, 29.3683, 29.3684],
-        [ 0.0000,  0.0000,  0.0000, 32.0024, 32.0024, 32.0024],
-        [ 0.0000,  0.0000,  0.0000, 32.2138, 32.2138, 32.2141],
-        [ 0.0000,  0.0000,  0.0000, 33.8597, 33.8597, 33.8598]])
-
-```
-
-Each subject's first three positions are its two static measurements followed by the age token (code `13`
-or `14`, i.e., `[18, 30)` or `[30, 65)`), and these positions are masked out of the per-position ages:
-
-```python
+tensor([[ 7,  9, 12, 10, 11, 10, 11,  4],
+        [ 6,  9, 13, 10, 11, 10, 11,  4],
+        [ 8,  9, 12,  5,  3, 10, 11,  4],
+        [ 8,  9, 12,  5,  2, 10, 11,  4]])
+>>> batch.static_mask.int()
+tensor([[1, 1, 0, 0, 0, 0, 0, 0],
+        [1, 1, 0, 0, 0, 0, 0, 0],
+        [1, 1, 0, 0, 0, 0, 0, 0],
+        [1, 1, 0, 0, 0, 0, 0, 0]], dtype=torch.int32)
+>>> batch.time_derived_mask.int()
+tensor([[0, 0, 1, 0, 0, 0, 0, 0],
+        [0, 0, 1, 0, 0, 0, 0, 0],
+        [0, 0, 1, 0, 0, 0, 0, 0],
+        [0, 0, 1, 0, 0, 0, 0, 0]], dtype=torch.int32)
+>>> batch.age
+tensor([[  0.0000,   0.0000,   0.0000,  -1.3687,  -1.3687,  -1.3686,  -1.3686,
+          -1.3686],
+        [  0.0000,   0.0000,   0.0000,   0.3733,   0.3733,   0.3734,   0.3734,
+           0.3734],
+        [  0.0000,   0.0000,   0.0000, -20.7913,   0.5132,   0.5132,   0.5132,
+           0.5134],
+        [  0.0000,   0.0000,   0.0000, -20.7913,   1.6017,   1.6017,   1.6017,
+           1.6018]])
 >>> batch.age_bin
-tensor([[0, 0, 0, 2, 2, 2],
-        [0, 0, 0, 3, 3, 3],
-        [0, 0, 0, 3, 3, 3],
-        [0, 0, 0, 3, 3, 3]])
+tensor([[0, 0, 0, 1, 1, 1, 1, 1],
+        [0, 0, 0, 2, 2, 2, 2, 2],
+        [0, 0, 0, 1, 3, 3, 3, 3],
+        [0, 0, 0, 1, 3, 3, 3, 3]])
 
 ```
+
+Each sequence starts with the subject's two static measurements, followed by the age token (code `12` +
+the bin of the age at the window's first event), and then the dynamic data; only the latter carry
+per-position ages. The last two subjects' windows start at their birth event, whose age (0) sits far below
+this tiny synthetic cohort's distribution of non-birth ages (31.4 ± 1.5 years) — hence the large negative
+standardized value there.
 
 ### Testing Models that Use this Package
 
